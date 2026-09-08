@@ -1,0 +1,17 @@
+{
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^26.5.0",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2"
+  },
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:debug": "playwright test --debug",
+    "typecheck": "tsc --noEmit",
+    "qa:analyze": "tsx scripts/analyze-failures.ts",
+    "dashboard": "tsx scripts/generate-dashboard.ts",
+    "qa": "npm test && npm run qa:analyze && npm run dashboard"
+  }
+}
