@@ -12,7 +12,7 @@ test('user can create and complete a todo', async ({ page }) => {
 
   await expect(todo).toBeVisible();
 
-  const checkbox = page.getByRole('checkbox', { name: 'Toggle Todo' });
+  const checkbox = page.getByRole('checkbox', { name: 'Toggle Todos' });
 
   await checkbox.check();
 
