@@ -1,87 +1,107 @@
 import fs from 'fs';
 import path from 'path';
 
-type TestResult = {
-  status?: string;
-  duration?: number;
-  error?: {
-    message?: string;
-    stack?: string;
-  };
-};
+const resultsPath = path.resolve('test-results/results.json');
+const dashboardDir = path.resolve('qyntra-dashboard');
+const failuresPath = path.join(
+  dashboardDir,
+  'failures.json'
+);
 
-type TestCase = {
-  title?: string;
-  results?: TestResult[];
-};
-
-type Spec = {
-  title?: string;
-  tests?: TestCase[];
-};
-
-type Suite = {
-  title?: string;
-  specs?: Spec[];
-  suites?: Suite[];
-};
-
-type PlaywrightReport = {
-  suites?: Suite[];
-};
-
-const reportPath = path.resolve('test-results/results.json');
-
-if (!fs.existsSync(reportPath)) {
-  console.error('\n❌ Qyntra Analyzer: results.json not found.');
-  console.error('Run `npm test` first.\n');
+if (!fs.existsSync(resultsPath)) {
+  console.error(
+    `Test results not found: ${resultsPath}`
+  );
   process.exit(1);
 }
 
-const report: PlaywrightReport = JSON.parse(
-  fs.readFileSync(reportPath, 'utf-8')
+fs.mkdirSync(dashboardDir, {
+  recursive: true
+});
+
+const data = JSON.parse(
+  fs.readFileSync(resultsPath, 'utf-8')
 );
 
 let total = 0;
 let passed = 0;
 let failed = 0;
 let skipped = 0;
-let totalDuration = 0;
+let duration = 0;
 
-type Failure = {
-  test: string;
-  error: string;
-  category: string;
-  recommendation: string;
-};
+const failures: any[] = [];
 
-const failures: Failure[] = [];
+/**
+ * Remove ANSI terminal formatting codes
+ * from Playwright error messages.
+ */
+function cleanStackTrace(stack: string): string {
+  return String(stack).replace(
+    /\u001b\[[0-9;]*m/g,
+    ''
+  );
+}
 
+/**
+ * Extract file, line and column from
+ * a Playwright stack trace.
+ *
+ * Example:
+ *
+ * at /Users/.../todo.spec.ts:16:17
+ */
+function extractLocationFromStack(stack: string) {
+  const cleanedStack = cleanStackTrace(stack);
+
+  const match = cleanedStack.match(
+    /at\s+(\/[^:\n]+):(\d+):(\d+)/
+  );
+
+  if (!match) {
+    return {
+      file: null,
+      line: null,
+      column: null
+    };
+  }
+
+  return {
+    file: match[1],
+    line: Number(match[2]),
+    column: Number(match[3])
+  };
+}
+
+/**
+ * Classify the failure.
+ */
 function classifyFailure(error: string) {
   const text = error.toLowerCase();
 
   if (
     text.includes('strict mode violation') ||
     text.includes('locator') ||
-    text.includes('element') ||
-    text.includes('selector')
+    text.includes('element not found') ||
+    text.includes('resolved to multiple elements')
   ) {
     return {
       category: 'Locator / UI',
+
       recommendation:
-        'Use a more specific and stable locator such as getByRole(), getByLabel(), or a unique test id.'
+        'Use a specific and stable locator such as getByRole(), getByLabel(), or a unique test id.'
     };
   }
 
   if (
     text.includes('timeout') ||
     text.includes('timed out') ||
-    text.includes('waiting')
+    text.includes('waiting for')
   ) {
     return {
       category: 'Timeout / Synchronization',
+
       recommendation:
-        'Check application loading behavior and replace unnecessary fixed waits with condition-based waits.'
+        'Wait for the required UI state instead of using arbitrary delays.'
     };
   }
 
@@ -90,127 +110,440 @@ function classifyFailure(error: string) {
     text.includes('403') ||
     text.includes('404') ||
     text.includes('500') ||
-    text.includes('network') ||
-    text.includes('econnrefused')
+    text.includes('econnrefused') ||
+    text.includes('network')
   ) {
     return {
       category: 'API / Network',
+
       recommendation:
-        'Verify API availability, authentication, endpoint configuration, and environment health.'
+        'Validate the endpoint, authentication, request payload, and service availability.'
     };
   }
 
   if (
     text.includes('expect(') ||
-    text.includes('received') ||
-    text.includes('to be') ||
-    text.includes('assert')
+    text.includes('expected') ||
+    text.includes('received')
   ) {
     return {
       category: 'Functional / Assertion',
+
       recommendation:
-        'Review the expected behavior and compare it with the actual application response.'
+        'Validate the expected application behavior and investigate the actual value returned.'
     };
   }
 
   return {
     category: 'Unknown / Environment',
+
     recommendation:
-      'Inspect the Playwright trace, screenshot, and application logs for additional context.'
+      'Inspect the stack trace, test source, environment, and application logs.'
   };
 }
 
-function processSuite(suite: Suite) {
-  for (const spec of suite.specs ?? []) {
-    for (const test of spec.tests ?? []) {
+/**
+ * Read source code around the failing line.
+ */
+function readSource(
+  filePath: string | null | undefined,
+  lineNumber: number | null | undefined
+) {
+  if (
+    !filePath ||
+    !fs.existsSync(filePath)
+  ) {
+    return {
+      file: filePath ?? null,
+      line: lineNumber ?? null,
+      source: null
+    };
+  }
+
+  const lines = fs
+    .readFileSync(filePath, 'utf-8')
+    .split('\n');
+
+  /**
+   * If line number isn't available,
+   * return the beginning of the file.
+   */
+  if (!lineNumber) {
+    return {
+      file: filePath,
+      line: null,
+      source: lines
+        .slice(0, 40)
+        .map(
+          (line, index) =>
+            `${index + 1}: ${line}`
+        )
+        .join('\n')
+    };
+  }
+
+  const index = lineNumber - 1;
+
+  /**
+   * Show 5 lines before and 5 lines
+   * after the failing line.
+   */
+  const start = Math.max(
+    0,
+    index - 5
+  );
+
+  const end = Math.min(
+    lines.length,
+    index + 6
+  );
+
+  const source = lines
+    .slice(start, end)
+    .map(
+      (line, i) =>
+        `${start + i + 1}: ${line}`
+    )
+    .join('\n');
+
+  return {
+    file: filePath,
+    line: lineNumber,
+    source
+  };
+}
+
+/**
+ * Process Playwright suites recursively.
+ */
+function walkSuites(
+  suites: any[]
+) {
+  for (const suite of suites ?? []) {
+    /**
+     * Process test specs.
+     */
+    for (const spec of suite.specs ?? []) {
       total++;
 
-      const result =
-        test.results && test.results.length > 0
-          ? test.results[test.results.length - 1]
-          : undefined;
+      const test =
+        spec.tests?.[0];
 
-      const status = result?.status ?? 'unknown';
-
-      totalDuration += result?.duration ?? 0;
-
-      if (status === 'passed') {
-        passed++;
-      } else if (status === 'skipped' || status === 'pending') {
+      if (!test) {
         skipped++;
-      } else {
+        continue;
+      }
+
+      const results =
+        test.results ?? [];
+
+      const lastResult =
+        results[results.length - 1];
+
+      /**
+       * Calculate test duration.
+       */
+      duration += results.reduce(
+        (
+          sum: number,
+          result: any
+        ) =>
+          sum +
+          (result.duration || 0),
+        0
+      );
+
+      /**
+       * Determine test status.
+       */
+      if (
+        test.status === 'expected'
+      ) {
+        passed++;
+        continue;
+      }
+
+      if (
+        test.status === 'unexpected' ||
+        lastResult?.status === 'failed'
+      ) {
         failed++;
 
+        /**
+         * Extract the error.
+         */
+        const rawError =
+          lastResult?.error?.stack ||
+          lastResult?.error?.message ||
+          results[0]?.error?.stack ||
+          results[0]?.error?.message ||
+          'Unknown error';
+
+        /**
+         * Remove terminal formatting.
+         */
         const error =
-          result?.error?.message ||
-          result?.error?.stack ||
-          'No error message available';
+          cleanStackTrace(
+            rawError
+          );
 
-        const classification = classifyFailure(error);
+        /**
+         * Playwright sometimes provides
+         * spec.location, but your current
+         * result didn't.
+         *
+         * Therefore we extract the
+         * location directly from the
+         * stack trace.
+         */
+        const stackLocation =
+          extractLocationFromStack(
+            error
+          );
 
+        const specLocation =
+          spec.location ?? {};
+
+        const file =
+          specLocation.file ??
+          stackLocation.file;
+
+        const line =
+          specLocation.line ??
+          stackLocation.line;
+
+        const column =
+          specLocation.column ??
+          stackLocation.column;
+
+        /**
+         * Read source code around
+         * the failing line.
+         */
+        const sourceInfo =
+          readSource(
+            file,
+            line
+          );
+
+        /**
+         * Classify failure.
+         */
+        const classification =
+          classifyFailure(
+            error
+          );
+
+        /**
+         * Store structured failure.
+         */
         failures.push({
-          test: test.title ?? spec.title ?? 'Unnamed test',
+          test: spec.title,
+
+          titlePath:
+            spec.titlePath ?? [],
+
+          category:
+            classification.category,
+
+          recommendation:
+            classification.recommendation,
+
+          file:
+            sourceInfo.file,
+
+          line:
+            sourceInfo.line,
+
+          column,
+
           error,
-          category: classification.category,
-          recommendation: classification.recommendation
+
+          stackTrace:
+            error,
+
+          testSource:
+            sourceInfo.source
         });
+
+        continue;
       }
+
+      /**
+       * Anything else is considered
+       * skipped/unresolved.
+       */
+      skipped++;
     }
-  }
 
-  for (const child of suite.suites ?? []) {
-    processSuite(child);
+    /**
+     * Recursively process nested suites.
+     */
+    walkSuites(
+      suite.suites
+    );
   }
 }
 
-for (const suite of report.suites ?? []) {
-  processSuite(suite);
-}
+/**
+ * Start processing.
+ */
+walkSuites(
+  data.suites
+);
 
-const durationSeconds = (totalDuration / 1000).toFixed(1);
+/**
+ * Create output object.
+ */
+const output = {
+  generatedAt:
+    new Date().toISOString(),
 
-console.log('\n');
-console.log('╔════════════════════════════════════════════╗');
-console.log('║            QYNTRA QA ANALYZER             ║');
-console.log('╚════════════════════════════════════════════╝');
+  summary: {
+    total,
 
-console.log('\nTest Summary');
-console.log('────────────────────────────────────────────');
-console.log(`Total Tests       : ${total}`);
-console.log(`Passed            : ${passed}`);
-console.log(`Failed            : ${failed}`);
-console.log(`Skipped           : ${skipped}`);
-console.log(`Duration          : ${durationSeconds}s`);
+    passed,
 
-console.log('\nQuality Status');
-console.log('────────────────────────────────────────────');
+    failed,
+
+    skipped,
+
+    durationSeconds:
+      (duration / 1000).toFixed(1)
+  },
+
+  failures
+};
+
+/**
+ * Save failures.json.
+ */
+fs.writeFileSync(
+  failuresPath,
+  JSON.stringify(
+    output,
+    null,
+    2
+  )
+);
+
+/**
+ * Console output.
+ */
+console.log('');
+
+console.log(
+  '======================================'
+);
+
+console.log(
+  ' QYNTRA FAILURE INTELLIGENCE'
+);
+
+console.log(
+  '======================================'
+);
+
+console.log('');
+
+console.log(
+  `Total Tests       : ${total}`
+);
+
+console.log(
+  `Passed            : ${passed}`
+);
+
+console.log(
+  `Failed            : ${failed}`
+);
+
+console.log(
+  `Skipped           : ${skipped}`
+);
+
+console.log(
+  `Duration          : ${(duration / 1000).toFixed(1)}s`
+);
+
+console.log('');
+
+console.log(
+  'Quality Status'
+);
 
 if (failed === 0) {
-  console.log('✓ HEALTHY');
+  console.log(
+    '✓ HEALTHY'
+  );
 } else {
-  console.log('✗ ATTENTION REQUIRED');
+  console.log(
+    '✗ ATTENTION REQUIRED'
+  );
 }
 
-console.log('\n');
+console.log('');
 
-if (failures.length === 0) {
-  console.log('Qyntra Recommendation');
-  console.log('────────────────────────────────────────────');
-  console.log('No blocking failures detected.');
-  console.log('Build is safe to proceed.');
-} else {
-  console.log('Qyntra Failure Intelligence');
-  console.log('────────────────────────────────────────────');
+if (failures.length > 0) {
+  console.log(
+    'Qyntra Failure Intelligence'
+  );
 
-  failures.forEach((failure, index) => {
-    console.log(`\n[${index + 1}] ${failure.test}`);
-    console.log(`Category        : ${failure.category}`);
-    console.log(`Error           : ${failure.error}`);
-    console.log(`Recommendation  : ${failure.recommendation}`);
-  });
+  console.log('');
+
+  failures.forEach(
+    (failure, index) => {
+      console.log(
+        `[${index + 1}] ${failure.test}`
+      );
+
+      console.log(
+        `Category        : ${failure.category}`
+      );
+
+      console.log(
+        `File            : ${failure.file}`
+      );
+
+      console.log(
+        `Line            : ${failure.line}`
+      );
+
+      console.log(
+        `Column          : ${failure.column}`
+      );
+
+      console.log('');
+
+      console.log(
+        'Recommendation :'
+      );
+
+      console.log(
+        failure.recommendation
+      );
+
+      console.log('');
+
+      if (failure.testSource) {
+        console.log(
+          'Test Source:'
+        );
+
+        console.log(
+          failure.testSource
+        );
+
+        console.log('');
+      }
+    }
+  );
 }
 
-console.log('\n');
-console.log('════════════════════════════════════════════');
-console.log('Qyntra analysis complete.');
-console.log('════════════════════════════════════════════\n');
+console.log('');
+
+console.log(
+  `Failure data saved: ${failuresPath}`
+);
+
+console.log('');

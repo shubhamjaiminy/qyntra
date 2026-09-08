@@ -1,0 +1,154 @@
+wq
+import fs from 'fs';
+import path from 'path';
+
+type FailureInput = {
+  test: string;
+  error: string;
+  category: string;
+  recommendation: string;
+};
+
+type AIAnalysis = {
+  severity: 'Low' | 'Medium' | 'High' | 'Critical';
+  category: string;
+  rootCause: string;
+  explanation: string;
+  recommendation: string;
+  suggestedFix: string;
+  confidence: 'Low' | 'Medium' | 'High';
+};
+
+const inputPath = path.resolve('qyntra-dashboard/failures.json');
+const outputPath = path.resolve('qyntra-dashboard/ai-analysis.json');
+
+if (!fs.existsSync(inputPath)) {
+  console.log('No failures found. AI analysis skipped.');
+  process.exit(0);
+}
+
+const failures: FailureInput[] = JSON.parse(
+  fs.readFileSync(inputPath, 'utf8')
+);
+
+function analyzeFailure(failure: FailureInput): AIAnalysis {
+  const error = failure.error.toLowerCase();
+
+  if (error.includes('strict mode violation')) {
+    return {
+      severity: 'Medium',
+      category: 'Locator / UI',
+      rootCause: 'The locator matched multiple elements.',
+      explanation:
+        'Playwright strict mode requires a locator to resolve to exactly one element. The current locator is ambiguous because multiple matching elements exist on the page.',
+      recommendation:
+        'Use a more specific locator based on the element role, accessible name, label, or a stable test identifier.',
+      suggestedFix:
+        "getByRole('checkbox', { name: 'Toggle Todo' })",
+      confidence: 'High'
+    };
+  }
+
+  if (
+    error.includes('timeout') ||
+    error.includes('timed out')
+  ) {
+    return {
+      severity: 'High',
+      category: 'Timeout / Synchronization',
+      rootCause:
+        'The expected condition was not satisfied within the configured timeout.',
+      explanation:
+        'The test waited for an element or condition that did not become ready in time. This can indicate slow application behavior, incorrect synchronization, or a genuine application defect.',
+      recommendation:
+        'Inspect the trace and replace fixed waits with condition-based synchronization where appropriate.',
+      suggestedFix:
+        'Use an explicit expect() or locator condition that represents the application readiness state.',
+      confidence: 'High'
+    };
+  }
+
+  if (
+    error.includes('401') ||
+    error.includes('403') ||
+    error.includes('404') ||
+    error.includes('500')
+  ) {
+    return {
+      severity: 'High',
+      category: 'API / Network',
+      rootCause:
+        'The API returned an unexpected HTTP response.',
+      explanation:
+        'The test received an HTTP response indicating an authentication, authorization, routing, or server-side problem.',
+      recommendation:
+        'Verify the endpoint, authentication, environment configuration, and API availability.',
+      suggestedFix:
+        'Validate request URL, headers, credentials, environment variables, and API service health.',
+      confidence: 'Medium'
+    };
+  }
+
+  if (
+    error.includes('expect(') ||
+    error.includes('received') ||
+    error.includes('assert')
+  ) {
+    return {
+      severity: 'Medium',
+      category: 'Functional / Assertion',
+      rootCause:
+        'The actual application behavior did not match the expected result.',
+      explanation:
+        'The automated assertion detected a difference between expected and actual behavior.',
+      recommendation:
+        'Determine whether the application behavior or the test expectation is incorrect before changing the test.',
+      suggestedFix:
+        'Compare expected and actual values and update the application or assertion accordingly.',
+      confidence: 'Medium'
+    };
+  }
+
+  return {
+    severity: 'Medium',
+    category: failure.category || 'Unknown / Environment',
+    rootCause: 'The failure requires additional investigation.',
+    explanation:
+      'Qyntra could not confidently determine the root cause from the available error information.',
+    recommendation:
+      failure.recommendation ||
+      'Inspect the Playwright trace, screenshot, logs, and application state.',
+    suggestedFix:
+      'Review the failure artifacts and application logs before modifying the test.',
+    confidence: 'Low'
+  };
+}
+
+const analyses = failures.map(failure => ({
+  test: failure.test,
+  error: failure.error,
+  analysis: analyzeFailure(failure)
+}));
+
+fs.writeFileSync(
+  outputPath,
+  JSON.stringify(analyses, null, 2)
+);
+
+console.log('');
+console.log('======================================');
+console.log(' QYNTRA AI FAILURE INTELLIGENCE');
+console.log('======================================');
+console.log('');
+
+for (const item of analyses) {
+  console.log(`Test       : ${item.test}`);
+  console.log(`Severity   : ${item.analysis.severity}`);
+  console.log(`Category   : ${item.analysis.category}`);
+  console.log(`Root Cause : ${item.analysis.rootCause}`);
+  console.log(`Confidence : ${item.analysis.confidence}`);
+  console.log('');
+}
+
+console.log(`AI analysis saved to: ${outputPath}`);
+console.log('');

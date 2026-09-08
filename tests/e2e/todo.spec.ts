@@ -12,9 +12,9 @@ test('user can create and complete a todo', async ({ page }) => {
 
   await expect(todo).toBeVisible();
 
-  const checkbox = page.getByRole('checkbox', { name: 'Toggle Todo' });
-
-  await checkbox.check();
+const checkbox = page.getByRole('checkbox', {
+  name: 'Toggle Todo'
+});  await checkbox.check();
 
   await expect(todo).toHaveCSS(
     'text-decoration-line',

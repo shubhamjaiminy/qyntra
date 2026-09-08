@@ -12,6 +12,12 @@
     "typecheck": "tsc --noEmit",
     "qa:analyze": "tsx scripts/analyze-failures.ts",
     "dashboard": "tsx scripts/generate-dashboard.ts",
-    "qa": "npm test && npm run qa:analyze && npm run dashboard"
+    "qa": "npm test && npm run qa:analyze && npm run dashboard",
+    "ai": "tsx scripts/ai-analyzer.ts",
+    "generate:test": "tsx scripts/test-generator.ts",
+    "analyze:risk": "tsx scripts/risk-analyzer.ts",
+    "qyntra": "tsx scripts/qyntra.ts",
+    "discover": "tsx scripts/application-discovery.ts",
+    "map:scenarios": "tsx scripts/scenario-mapper.ts"
   }
 }
