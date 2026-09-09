@@ -160,6 +160,61 @@ function targetToLocator(
   )}')`;
 }
 
+/**
+ * Extract a Todo text from the action plan.
+ *
+ * Example:
+ * find target = "Qyntra task to complete"
+ *
+ * This allows subsequent check/delete actions
+ * to operate on the Todo discovered by the find
+ * action rather than inventing another target.
+ */
+function getTodoText(
+  actions: Action[]
+): string {
+  const findAction =
+    actions.find(
+      (action) =>
+        action.action.toLowerCase() ===
+        'find'
+    );
+
+  if (
+    findAction?.target
+  ) {
+    return findAction.target;
+  }
+
+  const deleteAction =
+    actions.find(
+      (action) =>
+        action.action.toLowerCase() ===
+        'delete'
+    );
+
+  if (
+    deleteAction?.target
+  ) {
+    return deleteAction.target;
+  }
+
+  const fillAction =
+    actions.find(
+      (action) =>
+        action.action.toLowerCase() ===
+        'fill'
+    );
+
+  if (
+    fillAction?.value
+  ) {
+    return fillAction.value;
+  }
+
+  return 'Qyntra test task';
+}
+
 function generateFillAction(
   action: Action
 ): string {
@@ -196,6 +251,69 @@ function generatePressAction(
   )}');`;
 }
 
+/**
+ * Generate a find action.
+ *
+ * IMPORTANT:
+ * Find must ONLY find the target.
+ * It must never perform a delete/hover/check operation.
+ */
+function generateFindAction(
+  action: Action
+): string {
+  if (!action.target) {
+    return `  // Qyntra could not determine what to find`;
+  }
+
+  const target =
+    escapeSingleQuote(
+      action.target
+    );
+
+  return `  const todoItem = page
+    .locator('li')
+    .filter({
+      hasText: '${target}'
+    });
+
+  await expect(todoItem).toBeVisible();`;
+}
+
+function generateCheckAction(
+  action: Action
+): string {
+  const target =
+    action.target ?? '';
+
+  if (
+    target.toLowerCase().includes(
+      'checkbox'
+    )
+  ) {
+    return `  await todoItem
+    .getByRole('checkbox', {
+      name: 'Toggle Todo'
+    })
+    .check();`;
+  }
+
+  return `  // Qyntra could not safely map this check action`;
+}
+
+function generateDeleteAction(
+  action: Action
+): string {
+  if (!action.target) {
+    return `  // Qyntra could not determine what to delete`;
+  }
+
+  return `  await todoItem.hover();
+
+  await todoItem
+    .locator('button.destroy')
+    .click();`;
+}
+
 function generateVerifyAction(
   action: Action
 ): string {
@@ -222,74 +340,14 @@ function generateVerifyAction(
   if (
     condition === 'completed'
   ) {
-    return `  const completedTodo =
-    page
-      .locator('li')
-      .filter({
-        hasText: '${target}'
-      });
-
-  await expect(
-    completedTodo.locator('.toggle')
+    return `  await expect(
+    todoItem.locator('.toggle')
   ).toBeChecked();`;
   }
 
   return `  await expect(
     page.getByText('${target}')
   ).toBeVisible();`;
-}
-
-function generateFindAction(
-  action: Action
-): string {
-  if (!action.target) {
-    return `  // Qyntra could not determine what to find`;
-  }
-
-  const target =
-    escapeSingleQuote(
-      action.target
-    );
-
-  return `  const todoItem =
-    page
-      .locator('li')
-      .filter({
-        hasText: '${target}'
-      });
-
-  await expect(todoItem).toBeVisible();`;
-}
-
-function generateCheckAction(
-  action: Action
-): string {
-  const target =
-    action.target ?? '';
-
-  if (
-    target.toLowerCase().includes(
-      'checkbox'
-    )
-  ) {
-    return `  await todoItem
-    .getByRole('checkbox', {
-      name: 'Toggle Todo'
-    })
-    .check();`;
-  }
-
-  return `  // Qyntra could not safely map this check action`;
-}
-
-function generateDeleteAction(action: Action): string {
-  if (!action.target) {
-    return `  // Qyntra could not determine what to delete`;
-  }
-
-  return `  await todoItem.hover();
-
-  await todoItem.locator('button.destroy').click();`;
 }
 
 function generateInspectAction(
@@ -315,6 +373,12 @@ function generateManualReviewAction(
   )}`;
 }
 
+/**
+ * Generate one action at a time.
+ *
+ * No action is allowed to generate code
+ * belonging to another action.
+ */
 function generateAction(
   action: Action
 ): string {
@@ -331,11 +395,6 @@ function generateAction(
         action
       );
 
-    case 'verify':
-      return generateVerifyAction(
-        action
-      );
-
     case 'find':
       return generateFindAction(
         action
@@ -348,6 +407,11 @@ function generateAction(
 
     case 'delete':
       return generateDeleteAction(
+        action
+      );
+
+    case 'verify':
+      return generateVerifyAction(
         action
       );
 
@@ -380,10 +444,23 @@ function generateTest(
           a.order - b.order
       );
 
+  const todoText =
+    getTodoText(actions);
+
   const generatedActions =
     actions
       .map(generateAction)
       .join('\n\n');
+
+  const safeUrl =
+    escapeSingleQuote(
+      mapping.application.url
+    );
+
+  const safeTodoText =
+    escapeSingleQuote(
+      todoText
+    );
 
   return `import {
   test,
@@ -406,9 +483,7 @@ function generateTest(
  )}
  *
  * Application URL:
- * ${escapeSingleQuote(
-   mapping.application.url
- )}
+ * ${safeUrl}
  *
  * Risk:
  * ${escapeSingleQuote(
@@ -430,6 +505,9 @@ function generateTest(
    scenario.type
  )}
  *
+ * Todo:
+ * ${safeTodoText}
+ *
  * Generated by Qyntra
  * =========================================
  */
@@ -439,7 +517,7 @@ test(
     scenario.title
   )}',
   async ({ page }) => {
-   await page.goto('https://demo.playwright.dev/todomvc');
+    await page.goto('${safeUrl}');
 
 ${generatedActions}
   }
@@ -491,6 +569,10 @@ function main(): void {
 
   console.log(
     `Application : ${mapping.application.title}`
+  );
+
+  console.log(
+    `URL         : ${mapping.application.url}`
   );
 
   console.log(
@@ -578,7 +660,6 @@ function main(): void {
   );
 
   console.log('');
-
   console.log(
     `Tests saved to: ${generatedTestsDirectory}`
   );
