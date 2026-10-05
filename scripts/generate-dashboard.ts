@@ -1,5 +1,6 @@
 import fs from 'fs';
-import path from 'path';
+
+import { stagePaths } from './lib/paths';
 
 type Result = {
   status?: string;
@@ -30,19 +31,22 @@ type Report = {
 };
 
 type AIAnalysis = {
-  test: string;
-  severity: 'Low' | 'Medium' | 'High' | 'Critical';
-  category: string;
-  rootCause: string;
-  explanation: string;
-  recommendation: string;
-  suggestedFix: string;
-  confidence: 'Low' | 'Medium' | 'High';
+  test?: string;
+  severity?: 'Low' | 'Medium' | 'High' | 'Critical';
+  category?: string;
+  rootCause?: string;
+  whyItHappened?: string;
+  explanation?: string;
+  recommendation?: string;
+  suggestedFix?: string;
+  suggestedCode?: string;
+  confidence?: 'Low' | 'Medium' | 'High';
 };
 
 type AIReport = {
   generatedAt?: string;
   summary?: {
+    failuresAnalyzed?: number;
     totalFailures?: number;
     critical?: number;
     high?: number;
@@ -52,20 +56,154 @@ type AIReport = {
   analyses?: AIAnalysis[];
 };
 
-const reportPath = path.resolve('test-results/results.json');
-const outputDir = path.resolve('qyntra-dashboard');
-const outputPath = path.join(outputDir, 'index.html');
-const aiPath = path.join(outputDir, 'ai-analysis.json');
+type FailureReport = {
+  summary?: {
+    total?: number;
+    passed?: number;
+    failed?: number;
+    skipped?: number;
+    durationSeconds?: string;
+  };
+  failures?: unknown[];
+};
+
+type RiskReport = {
+  risk?: {
+    level?: string;
+    score?: number;
+  };
+  riskLevel?: string;
+  riskScore?: number;
+  summary?: {
+    total?: number;
+  };
+};
+
+type ApplicationMap = {
+  application?: {
+    title?: string;
+    url?: string;
+    framework?: string;
+  };
+
+  capabilities?: Array<{
+    name?: string;
+    confidence?: string;
+  }>;
+
+  todoStructure?: {
+    detected?: boolean;
+  };
+
+  dynamicDiscovery?: {
+    enabled?: boolean;
+  };
+
+  metadata?: {
+    authenticationIndicators?: unknown[];
+    paymentIndicators?: unknown[];
+  };
+
+  network?: {
+    apiEndpoints?: unknown[];
+  };
+};
+
+type ScenarioMapping = {
+  scenarios?: unknown[];
+  summary?: {
+    total?: number;
+  };
+};
+
+type GenerationSummary = {
+  summary?: {
+    generated?: number;
+    skipped?: number;
+  };
+};
+
+const paths = stagePaths();
+
+const dashboardDir = paths.outputDir;
+const reportPath = paths.playwrightResults;
+const outputPath = paths.dashboard;
+const aiPath = paths.aiAnalysis;
+const failurePath = paths.failures;
+const riskPath = paths.riskAnalysis;
+const applicationPath = paths.applicationMap;
+const scenarioPath = paths.scenarioMapping;
+const generationPath = paths.generationSummary;
 
 if (!fs.existsSync(reportPath)) {
-  console.error('❌ test-results/results.json not found.');
-  console.error('Run npm test first.');
+  console.error(
+    '❌ test-results/results.json not found.'
+  );
+
+  console.error(
+    'Run npm test first.'
+  );
+
   process.exit(1);
 }
 
-const report: Report = JSON.parse(
-  fs.readFileSync(reportPath, 'utf8')
-);
+function readJson<T>(
+  file: string
+): T | null {
+  if (!fs.existsSync(file)) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(
+      fs.readFileSync(file, 'utf8')
+    ) as T;
+  } catch {
+    return null;
+  }
+}
+
+function escapeHtml(
+  value: unknown
+): string {
+  if (
+    value === null ||
+    value === undefined
+  ) {
+    return '';
+  }
+
+  return String(value)
+    .replaceAll(
+      '&',
+      '&amp;'
+    )
+    .replaceAll(
+      '<',
+      '&lt;'
+    )
+    .replaceAll(
+      '>',
+      '&gt;'
+    )
+    .replaceAll(
+      '"',
+      '&quot;'
+    )
+    .replaceAll(
+      "'",
+      '&#039;'
+    );
+}
+
+// --------------------------------------------------
+// PLAYWRIGHT RESULTS
+// --------------------------------------------------
+
+const report =
+  readJson<Report>(
+    reportPath
+  ) ?? {};
 
 const tests: {
   title: string;
@@ -74,141 +212,361 @@ const tests: {
   error: string;
 }[] = [];
 
-function collectSuite(suite: Suite) {
-  for (const spec of suite.specs ?? []) {
-    for (const test of spec.tests ?? []) {
+function collectSuite(
+  suite: Suite
+): void {
+  for (
+    const spec of
+    suite.specs ?? []
+  ) {
+    for (
+      const test of
+      spec.tests ?? []
+    ) {
       const result =
-        test.results && test.results.length > 0
-          ? test.results[test.results.length - 1]
+        test.results &&
+        test.results.length > 0
+          ? test.results[
+              test.results.length - 1
+            ]
           : undefined;
 
       tests.push({
-        title: test.title ?? spec.title ?? 'Unnamed test',
-        status: result?.status ?? 'unknown',
-        duration: result?.duration ?? 0,
-        error: result?.error?.message ?? ''
+        title:
+          test.title ??
+          spec.title ??
+          'Unnamed test',
+
+        status:
+          result?.status ??
+          'unknown',
+
+        duration:
+          result?.duration ??
+          0,
+
+        error:
+          result?.error?.message ??
+          ''
       });
     }
   }
 
-  for (const child of suite.suites ?? []) {
+  for (
+    const child of
+    suite.suites ?? []
+  ) {
     collectSuite(child);
   }
 }
 
-for (const suite of report.suites ?? []) {
+for (
+  const suite of
+  report.suites ?? []
+) {
   collectSuite(suite);
 }
 
-const total = tests.length;
+const total =
+  tests.length;
 
-const passed = tests.filter(
-  t => t.status === 'passed'
-).length;
+const passed =
+  tests.filter(
+    test =>
+      test.status === 'passed'
+  ).length;
 
-const failed = tests.filter(
-  t =>
-    t.status === 'failed' ||
-    t.status === 'timedOut'
-).length;
+const failed =
+  tests.filter(
+    test =>
+      test.status === 'failed' ||
+      test.status === 'timedOut'
+  ).length;
 
-const skipped = tests.filter(
-  t =>
-    t.status === 'skipped' ||
-    t.status === 'pending'
-).length;
+const skipped =
+  tests.filter(
+    test =>
+      test.status === 'skipped' ||
+      test.status === 'pending'
+  ).length;
 
 const duration = (
   tests.reduce(
-    (sum, t) => sum + t.duration,
+    (sum, test) =>
+      sum + test.duration,
     0
   ) / 1000
 ).toFixed(1);
 
-const status =
-  failed === 0
+// --------------------------------------------------
+// QYNTRA ARTIFACTS
+// --------------------------------------------------
+
+const aiReport =
+  readJson<AIReport>(
+    aiPath
+  );
+
+const failureReport =
+  readJson<FailureReport>(
+    failurePath
+  );
+
+const riskReport =
+  readJson<RiskReport>(
+    riskPath
+  );
+
+const applicationMap =
+  readJson<ApplicationMap>(
+    applicationPath
+  );
+
+const scenarioMapping =
+  readJson<ScenarioMapping>(
+    scenarioPath
+  );
+
+const generationSummary =
+  readJson<GenerationSummary>(
+    generationPath
+  );
+
+// --------------------------------------------------
+// RELEASE DECISION
+// --------------------------------------------------
+
+const qualityGatePassed =
+  failed === 0;
+
+const releaseDecision =
+  qualityGatePassed
+    ? 'READY TO SHIP'
+    : 'RELEASE BLOCKED';
+
+const releaseClass =
+  qualityGatePassed
+    ? 'release-ready'
+    : 'release-blocked';
+
+const qualityStatus =
+  qualityGatePassed
     ? 'HEALTHY'
     : 'ATTENTION REQUIRED';
 
-const statusClass =
-  failed === 0
+const qualityStatusClass =
+  qualityGatePassed
     ? 'healthy'
     : 'failed';
+
+// --------------------------------------------------
+// RISK
+// --------------------------------------------------
+
+const riskLevel =
+  riskReport?.risk?.level ??
+  riskReport?.riskLevel ??
+  'UNKNOWN';
+
+const riskScore =
+  riskReport?.risk?.score ??
+  riskReport?.riskScore ??
+  0;
+
+// --------------------------------------------------
+// APPLICATION
+// --------------------------------------------------
+
+const applicationTitle =
+  applicationMap?.application
+    ?.title ??
+  'Unknown Application';
+
+const applicationUrl =
+  applicationMap?.application
+    ?.url ??
+  'Unknown URL';
+
+const framework =
+  applicationMap?.application
+    ?.framework ??
+  'Unknown';
+
+const capabilities =
+  applicationMap?.capabilities ??
+  [];
+
+const dynamicDiscovery =
+  applicationMap?.dynamicDiscovery
+    ?.enabled === true;
+
+const todoDetected =
+  applicationMap?.todoStructure
+    ?.detected === true;
+
+const apiCount =
+  applicationMap?.network
+    ?.apiEndpoints
+    ?.length ??
+  0;
+
+const authenticationDetected =
+  (
+    applicationMap?.metadata
+      ?.authenticationIndicators
+      ?.length ??
+    0
+  ) > 0;
+
+const paymentDetected =
+  (
+    applicationMap?.metadata
+      ?.paymentIndicators
+      ?.length ??
+    0
+  ) > 0;
+
+// --------------------------------------------------
+// COVERAGE
+// --------------------------------------------------
+
+const scenarioCount =
+  scenarioMapping?.scenarios
+    ?.length ??
+  scenarioMapping?.summary
+    ?.total ??
+  0;
+
+const generatedTests =
+  generationSummary?.summary
+    ?.generated ??
+  total;
+
+const generationSkipped =
+  generationSummary?.summary
+    ?.skipped ??
+  0;
+
+const executionRate =
+  total === 0
+    ? 0
+    : Math.round(
+        (passed / total) *
+          100
+      );
+
+// --------------------------------------------------
+// AI
+// --------------------------------------------------
+
+const aiAnalyses =
+  aiReport?.analyses ??
+  [];
+
+const aiFailureCount =
+  aiAnalyses.length;
+
+const aiCritical =
+  aiReport?.summary
+    ?.critical ??
+  aiAnalyses.filter(
+    x =>
+      x.severity ===
+      'Critical'
+  ).length;
+
+const aiHigh =
+  aiReport?.summary
+    ?.high ??
+  aiAnalyses.filter(
+    x =>
+      x.severity ===
+      'High'
+  ).length;
+
+const aiMedium =
+  aiReport?.summary
+    ?.medium ??
+  aiAnalyses.filter(
+    x =>
+      x.severity ===
+      'Medium'
+  ).length;
+
+const aiLow =
+  aiReport?.summary
+    ?.low ??
+  aiAnalyses.filter(
+    x =>
+      x.severity ===
+      'Low'
+  ).length;
+
+// --------------------------------------------------
+// TEST TABLE
+// --------------------------------------------------
 
 const rows = tests
   .map(test => {
     const passedTest =
-      test.status === 'passed';
+      test.status ===
+      'passed';
+
+    const skippedTest =
+      test.status ===
+        'skipped' ||
+      test.status ===
+        'pending';
+
+    const badgeClass =
+      passedTest
+        ? 'pass'
+        : skippedTest
+          ? 'skip'
+          : 'fail';
+
+    const badgeText =
+      passedTest
+        ? '✓ PASSED'
+        : skippedTest
+          ? '— SKIPPED'
+          : '✗ FAILED';
 
     return `
       <tr>
-        <td>${escapeHtml(test.title)}</td>
         <td>
-          <span class="badge ${
-            passedTest ? 'pass' : 'fail'
-          }">
-            ${
-              passedTest
-                ? '✓ PASSED'
-                : '✗ FAILED'
-            }
+          ${escapeHtml(
+            test.title
+          )}
+        </td>
+
+        <td>
+          <span class="badge ${badgeClass}">
+            ${badgeText}
           </span>
         </td>
-        <td>${test.duration} ms</td>
+
+        <td>
+          ${test.duration} ms
+        </td>
       </tr>
     `;
   })
   .join('');
 
-const failureSection =
-  failed === 0
-    ? `
-      <div class="success-box">
-        <strong>✓ No blocking failures detected</strong>
-        <p>
-          All automated quality checks passed successfully.
-        </p>
-      </div>
-    `
-    : `
-      <div class="failure-box">
-        <strong>
-          ⚠ ${failed} test failure(s) detected
-        </strong>
-        <p>
-          Qyntra AI Failure Intelligence has analyzed
-          the detected failures below.
-        </p>
-      </div>
-    `;
+// --------------------------------------------------
+// AI SECTION
+// --------------------------------------------------
 
-/*
- * Load AI analysis if available.
- */
-let aiReport: AIReport | null = null;
-
-if (fs.existsSync(aiPath)) {
-  try {
-    aiReport = JSON.parse(
-      fs.readFileSync(aiPath, 'utf8')
-    );
-  } catch {
-    aiReport = null;
-  }
-}
-
-/*
- * Generate AI Failure Intelligence section.
- */
 const aiSection =
-  aiReport?.analyses &&
-  aiReport.analyses.length > 0
+  aiAnalyses.length > 0
     ? `
-      <section class="ai-section">
+      <section class="section">
 
-        <div class="ai-header">
+        <div class="section-header">
+
           <div>
-            <div class="ai-label">
+            <div class="eyebrow">
               QYNTRA AI
             </div>
 
@@ -217,132 +575,303 @@ const aiSection =
             </h2>
 
             <p>
-              Automated root-cause analysis and
-              recommended remediation.
+              Root-cause analysis and
+              application-aware remediation.
             </p>
           </div>
 
-          <div class="ai-summary">
-            <span>
-              ${aiReport.summary?.totalFailures ?? 0}
-              failures analyzed
-            </span>
+          <div class="ai-count">
+            ${aiFailureCount}
+            failure${aiFailureCount === 1 ? '' : 's'}
+            analyzed
           </div>
+
         </div>
 
-        ${aiReport.analyses
-          .map(analysis => {
+        <div class="ai-summary-grid">
 
-            const severityClass =
-              analysis.severity.toLowerCase();
+          <div class="mini-card critical">
+            <span>CRITICAL</span>
+            <strong>
+              ${aiCritical}
+            </strong>
+          </div>
 
-            const confidenceClass =
-              analysis.confidence.toLowerCase();
+          <div class="mini-card high">
+            <span>HIGH</span>
+            <strong>
+              ${aiHigh}
+            </strong>
+          </div>
 
-            return `
-              <div class="ai-card">
+          <div class="mini-card medium">
+            <span>MEDIUM</span>
+            <strong>
+              ${aiMedium}
+            </strong>
+          </div>
 
-                <div class="ai-card-header">
+          <div class="mini-card low">
+            <span>LOW</span>
+            <strong>
+              ${aiLow}
+            </strong>
+          </div>
 
-                  <div>
-                    <h3>
-                      ✗ ${escapeHtml(analysis.test)}
-                    </h3>
+        </div>
 
-                    <div class="ai-meta">
+        ${aiAnalyses
+          .map(
+            analysis => {
+              const severity =
+                analysis.severity ??
+                'Medium';
 
-                      <span class="ai-badge severity-${severityClass}">
-                        ${escapeHtml(
-                          analysis.severity
+              const confidence =
+                analysis.confidence ??
+                'Medium';
+
+              const rootCause =
+                analysis.rootCause ??
+                'No root cause available.';
+
+              const whyItHappened =
+                analysis.whyItHappened ??
+                analysis.explanation ??
+                'No explanation available.';
+
+              const recommendation =
+                analysis.recommendation ??
+                'Review the failing test and application behavior.';
+
+              const suggestedCode =
+                analysis.suggestedCode ??
+                analysis.suggestedFix ??
+                '';
+
+              return `
+                <div class="ai-card">
+
+                  <div class="ai-card-top">
+
+                    <div>
+
+                      <h3>
+                        ✗ ${escapeHtml(
+                          analysis.test ??
+                          'Unknown test'
                         )}
-                      </span>
+                      </h3>
 
-                      <span class="ai-badge category">
-                        ${escapeHtml(
-                          analysis.category
-                        )}
-                      </span>
+                      <div class="badges">
 
-                      <span class="ai-badge confidence-${confidenceClass}">
-                        ${escapeHtml(
-                          analysis.confidence
-                        )} confidence
-                      </span>
+                        <span class="badge severity-${severity.toLowerCase()}">
+                          ${escapeHtml(
+                            severity
+                          )}
+                        </span>
+
+                        <span class="badge category">
+                          ${escapeHtml(
+                            analysis.category ??
+                            'Unknown'
+                          )}
+                        </span>
+
+                        <span class="badge confidence-${confidence.toLowerCase()}">
+                          ${escapeHtml(
+                            confidence
+                          )} confidence
+                        </span>
+
+                      </div>
 
                     </div>
+
+                  </div>
+
+                  <div class="ai-grid">
+
+                    <div class="ai-block">
+
+                      <div class="block-title">
+                        ROOT CAUSE
+                      </div>
+
+                      <div class="block-content">
+                        ${escapeHtml(
+                          rootCause
+                        )}
+                      </div>
+
+                    </div>
+
+                    <div class="ai-block">
+
+                      <div class="block-title">
+                        WHY IT HAPPENED
+                      </div>
+
+                      <div class="block-content">
+                        ${escapeHtml(
+                          whyItHappened
+                        )}
+                      </div>
+
+                    </div>
+
+                    <div class="ai-block">
+
+                      <div class="block-title">
+                        RECOMMENDED FIX
+                      </div>
+
+                      <div class="block-content">
+                        ${escapeHtml(
+                          recommendation
+                        )}
+                      </div>
+
+                    </div>
+
+                    ${
+                      suggestedCode
+                        ? `
+                          <div class="ai-block">
+
+                            <div class="block-title">
+                              SUGGESTED CODE
+                            </div>
+
+                            <pre class="code-block"><code>${escapeHtml(
+                              suggestedCode
+                            )}</code></pre>
+
+                          </div>
+                        `
+                        : ''
+                    }
+
                   </div>
 
                 </div>
-
-                <div class="ai-grid">
-
-                  <div class="ai-block">
-
-                    <div class="ai-block-title">
-                      ROOT CAUSE
-                    </div>
-
-                    <div class="ai-block-content">
-                      ${escapeHtml(
-                        analysis.rootCause
-                      )}
-                    </div>
-
-                  </div>
-
-                  <div class="ai-block">
-
-                    <div class="ai-block-title">
-                      WHY IT HAPPENED
-                    </div>
-
-                    <div class="ai-block-content">
-                      ${escapeHtml(
-                        analysis.explanation
-                      )}
-                    </div>
-
-                  </div>
-
-                  <div class="ai-block">
-
-                    <div class="ai-block-title">
-                      RECOMMENDED FIX
-                    </div>
-
-                    <div class="ai-block-content">
-                      ${escapeHtml(
-                        analysis.recommendation
-                      )}
-                    </div>
-
-                  </div>
-
-                  <div class="ai-block">
-
-                    <div class="ai-block-title">
-                      SUGGESTED CODE
-                    </div>
-
-                    <pre class="code-block"><code>${escapeHtml(
-                      analysis.suggestedFix
-                    )}</code></pre>
-
-                  </div>
-
-                </div>
-
-              </div>
-            `;
-          })
+              `;
+            }
+          )
           .join('')}
 
       </section>
     `
-    : '';
+    : `
+      <section class="section">
+
+        <div class="section-header">
+
+          <div>
+            <div class="eyebrow">
+              QYNTRA AI
+            </div>
+
+            <h2>
+              Failure Intelligence
+            </h2>
+
+            <p>
+              No AI failure analysis was required
+              for this execution.
+            </p>
+          </div>
+
+          <div class="ai-count clean">
+            0 failures
+          </div>
+
+        </div>
+
+        <div class="clean-ai">
+
+          <div class="clean-icon">
+            ✓
+          </div>
+
+          <div>
+            <strong>
+              No failures detected
+            </strong>
+
+            <p>
+              Qyntra did not generate an AI
+              failure diagnosis because all
+              executed tests passed.
+            </p>
+          </div>
+
+        </div>
+
+      </section>
+    `;
+
+// --------------------------------------------------
+// CAPABILITIES
+// --------------------------------------------------
+
+const capabilityHtml =
+  capabilities.length > 0
+    ? capabilities
+        .map(
+          capability => `
+            <span class="capability">
+              ✓ ${escapeHtml(
+                capability.name ??
+                'Unknown capability'
+              )}
+            </span>
+          `
+        )
+        .join('')
+    : `
+        <span class="muted">
+          No capabilities discovered
+        </span>
+      `;
+
+// --------------------------------------------------
+// RELEASE MESSAGE
+// --------------------------------------------------
+
+const releaseMessage =
+  qualityGatePassed
+    ? `
+      <strong>
+        All automated quality checks passed.
+      </strong>
+
+      <p>
+        No blocking test failures were detected.
+        The current build is eligible for release.
+      </p>
+    `
+    : `
+      <strong>
+        ${failed} blocking test
+        ${failed === 1 ? 'failure' : 'failures'}
+        detected.
+      </strong>
+
+      <p>
+        Qyntra recommends fixing the detected
+        quality issue${failed === 1 ? '' : 's'}
+        before release.
+      </p>
+    `;
+
+// --------------------------------------------------
+// HTML
+// --------------------------------------------------
 
 const html = `
 <!DOCTYPE html>
+
 <html lang="en">
 
 <head>
@@ -354,7 +883,9 @@ const html = `
   content="width=device-width, initial-scale=1.0"
 >
 
-<title>Qyntra QA Dashboard</title>
+<title>
+  Qyntra Release Intelligence
+</title>
 
 <style>
 
@@ -372,29 +903,143 @@ body {
     sans-serif;
 
   background: #f5f7fb;
+
   color: #172033;
 }
 
 .container {
-  max-width: 1200px;
+  max-width: 1280px;
+
   margin: auto;
-  padding: 40px 24px;
+
+  padding: 36px 24px 60px;
 }
 
 .header {
-  margin-bottom: 30px;
+  display: flex;
+
+  justify-content: space-between;
+
+  align-items: flex-end;
+
+  margin-bottom: 28px;
 }
 
 .logo {
-  font-size: 32px;
-  font-weight: 800;
-  letter-spacing: -1px;
+  font-size: 34px;
+
+  font-weight: 850;
+
+  letter-spacing: -1.5px;
 }
 
 .subtitle {
   color: #667085;
-  margin-top: 6px;
+
+  margin-top: 5px;
+
+  font-size: 14px;
 }
+
+.generated {
+  color: #98a2b3;
+
+  font-size: 12px;
+}
+
+/* RELEASE */
+
+.release {
+  border-radius: 18px;
+
+  padding: 34px;
+
+  margin-bottom: 24px;
+
+  color: white;
+}
+
+.release-ready {
+  background:
+    linear-gradient(
+      135deg,
+      #087443,
+      #0b8f55
+    );
+}
+
+.release-blocked {
+  background:
+    linear-gradient(
+      135deg,
+      #b42318,
+      #d92d20
+    );
+}
+
+.release-label {
+  font-size: 12px;
+
+  font-weight: 800;
+
+  letter-spacing: 1.8px;
+
+  opacity: .8;
+
+  margin-bottom: 8px;
+}
+
+.release h1 {
+  margin: 0;
+
+  font-size: 38px;
+
+  letter-spacing: -1px;
+}
+
+.release p {
+  margin: 10px 0 0;
+
+  opacity: .9;
+
+  line-height: 1.6;
+}
+
+.release-grid {
+  display: grid;
+
+  grid-template-columns:
+    repeat(4, 1fr);
+
+  gap: 12px;
+
+  margin-top: 28px;
+}
+
+.release-stat {
+  background:
+    rgba(255,255,255,.12);
+
+  border-radius: 12px;
+
+  padding: 15px;
+}
+
+.release-stat span {
+  display: block;
+
+  font-size: 11px;
+
+  opacity: .7;
+
+  margin-bottom: 5px;
+}
+
+.release-stat strong {
+  font-size: 23px;
+}
+
+/* CARDS */
 
 .cards {
   display: grid;
@@ -404,7 +1049,7 @@ body {
 
   gap: 18px;
 
-  margin-bottom: 28px;
+  margin-bottom: 24px;
 }
 
 .card {
@@ -412,85 +1057,183 @@ body {
 
   border-radius: 14px;
 
-  padding: 24px;
+  padding: 22px;
 
   box-shadow:
-    0 2px 10px rgba(0,0,0,0.05);
+    0 2px 10px
+    rgba(0,0,0,.05);
 }
 
 .card-title {
   color: #667085;
 
-  font-size: 14px;
+  font-size: 12px;
 
-  margin-bottom: 10px;
+  font-weight: 750;
+
+  letter-spacing: .5px;
+
+  margin-bottom: 9px;
 }
 
 .number {
-  font-size: 34px;
-
-  font-weight: 750;
-}
-
-.status {
-  padding: 30px;
-
-  border-radius: 14px;
-
-  margin-bottom: 28px;
-
-  background: white;
-
-  box-shadow:
-    0 2px 10px rgba(0,0,0,0.05);
-}
-
-.status h2 {
-  margin-top: 0;
-}
-
-.status-value {
-  font-size: 28px;
+  font-size: 32px;
 
   font-weight: 800;
 }
 
-.healthy {
-  color: #087443;
+/* APPLICATION */
+
+.application {
+  display: grid;
+
+  grid-template-columns:
+    1.2fr .8fr;
+
+  gap: 18px;
+
+  margin-bottom: 24px;
 }
 
-.failed {
-  color: #b42318;
+.panel {
+  background: white;
+
+  border-radius: 14px;
+
+  padding: 24px;
+
+  box-shadow:
+    0 2px 10px
+    rgba(0,0,0,.05);
 }
 
-.success-box,
-.failure-box {
-  margin-top: 18px;
+.panel h2 {
+  margin: 0 0 5px;
 
-  padding: 18px;
+  font-size: 20px;
+}
+
+.panel-subtitle {
+  color: #667085;
+
+  font-size: 13px;
+
+  margin-bottom: 18px;
+}
+
+.app-url {
+  color: #475467;
+
+  font-size: 13px;
+
+  word-break: break-all;
+
+  margin-bottom: 18px;
+}
+
+.app-meta {
+  display: grid;
+
+  grid-template-columns:
+    repeat(2, 1fr);
+
+  gap: 12px;
+}
+
+.meta-box {
+  background: #f9fafb;
 
   border-radius: 10px;
+
+  padding: 14px;
 }
 
-.success-box {
+.meta-box span {
+  display: block;
+
+  color: #667085;
+
+  font-size: 11px;
+
+  margin-bottom: 5px;
+}
+
+.meta-box strong {
+  font-size: 15px;
+}
+
+/* CAPABILITIES */
+
+.capabilities {
+  display: flex;
+
+  gap: 8px;
+
+  flex-wrap: wrap;
+}
+
+.capability {
+  padding: 7px 11px;
+
+  border-radius: 999px;
+
   background: #ecfdf3;
+
   color: #087443;
+
+  font-size: 12px;
+
+  font-weight: 700;
 }
 
-.failure-box {
-  background: #fef3f2;
-  color: #b42318;
+.muted {
+  color: #98a2b3;
+
+  font-size: 13px;
 }
 
-/*
- * AI FAILURE INTELLIGENCE
- */
+/* INTELLIGENCE */
 
-.ai-section {
-  margin-bottom: 28px;
+.intelligence {
+  display: grid;
+
+  grid-template-columns:
+    repeat(4, 1fr);
+
+  gap: 12px;
+
+  margin-top: 18px;
 }
 
-.ai-header {
+.intel-box {
+  border: 1px solid #eaecf0;
+
+  border-radius: 10px;
+
+  padding: 14px;
+}
+
+.intel-box span {
+  display: block;
+
+  color: #667085;
+
+  font-size: 11px;
+
+  margin-bottom: 5px;
+}
+
+.intel-box strong {
+  font-size: 18px;
+}
+
+/* SECTIONS */
+
+.section {
+  margin-bottom: 24px;
+}
+
+.section-header {
   display: flex;
 
   justify-content: space-between;
@@ -501,83 +1244,146 @@ body {
 
   color: white;
 
-  padding: 28px 30px;
+  padding: 26px 28px;
 
   border-radius: 14px 14px 0 0;
 }
 
-.ai-label {
-  font-size: 12px;
+.eyebrow {
+  font-size: 11px;
 
   font-weight: 800;
 
   letter-spacing: 1.5px;
 
-  opacity: 0.7;
+  opacity: .65;
 
   margin-bottom: 5px;
 }
 
-.ai-header h2 {
+.section-header h2 {
   margin: 0;
 
-  font-size: 24px;
+  font-size: 23px;
 }
 
-.ai-header p {
-  margin: 7px 0 0;
-
+.section-header p {
   color: #c8ced9;
 
-  font-size: 14px;
+  margin: 6px 0 0;
+
+  font-size: 13px;
 }
 
-.ai-summary {
-  background: rgba(255,255,255,0.1);
-
-  padding: 10px 14px;
+.ai-count {
+  background:
+    rgba(255,255,255,.1);
 
   border-radius: 999px;
 
-  font-size: 13px;
+  padding: 9px 14px;
+
+  font-size: 12px;
+
+  white-space: nowrap;
+}
+
+.ai-count.clean {
+  background: #ecfdf3;
+
+  color: #087443;
+}
+
+/* AI */
+
+.ai-summary-grid {
+  display: grid;
+
+  grid-template-columns:
+    repeat(4, 1fr);
+
+  gap: 12px;
+
+  background: white;
+
+  padding: 18px 24px;
+
+  box-shadow:
+    0 2px 10px
+    rgba(0,0,0,.05);
+}
+
+.mini-card {
+  border-radius: 10px;
+
+  padding: 13px 15px;
+
+  background: #f9fafb;
+}
+
+.mini-card span {
+  display: block;
+
+  font-size: 10px;
+
+  font-weight: 800;
+
+  margin-bottom: 4px;
+}
+
+.mini-card strong {
+  font-size: 20px;
+}
+
+.mini-card.critical span,
+.mini-card.high span {
+  color: #b42318;
+}
+
+.mini-card.medium span {
+  color: #b54708;
+}
+
+.mini-card.low span {
+  color: #087443;
 }
 
 .ai-card {
   background: white;
 
-  border-radius: 0 0 14px 14px;
-
   padding: 28px;
 
   box-shadow:
-    0 2px 10px rgba(0,0,0,0.05);
+    0 2px 10px
+    rgba(0,0,0,.05);
 
-  margin-bottom: 18px;
+  margin-top: 2px;
 }
 
-.ai-card + .ai-card {
-  border-radius: 14px;
+.ai-card:last-child {
+  border-radius:
+    0 0 14px 14px;
 }
 
-.ai-card-header {
-  margin-bottom: 25px;
+.ai-card-top {
+  margin-bottom: 22px;
 }
 
-.ai-card-header h3 {
-  margin: 0 0 12px;
+.ai-card h3 {
+  margin: 0 0 11px;
 
   font-size: 18px;
 }
 
-.ai-meta {
+.badges {
   display: flex;
 
-  gap: 8px;
+  gap: 7px;
 
   flex-wrap: wrap;
 }
 
-.ai-badge {
+.badge {
   display: inline-block;
 
   padding: 6px 10px;
@@ -586,42 +1392,67 @@ body {
 
   font-size: 11px;
 
-  font-weight: 700;
+  font-weight: 750;
+}
+
+.pass {
+  background: #ecfdf3;
+
+  color: #087443;
+}
+
+.fail {
+  background: #fef3f2;
+
+  color: #b42318;
+}
+
+.skip {
+  background: #f2f4f7;
+
+  color: #667085;
+}
+
+.category {
+  background: #f2f4f7;
+
+  color: #344054;
 }
 
 .severity-critical,
 .severity-high {
   background: #fef3f2;
+
   color: #b42318;
 }
 
 .severity-medium {
   background: #fffaeb;
+
   color: #b54708;
 }
 
 .severity-low {
   background: #ecfdf3;
-  color: #087443;
-}
 
-.ai-badge.category {
-  background: #f2f4f7;
-  color: #344054;
+  color: #087443;
 }
 
 .confidence-high {
   background: #ecfdf3;
+
   color: #087443;
 }
 
 .confidence-medium {
   background: #fffaeb;
+
   color: #b54708;
 }
 
 .confidence-low {
   background: #f2f4f7;
+
   color: #667085;
 }
 
@@ -631,7 +1462,7 @@ body {
   grid-template-columns:
     repeat(2, 1fr);
 
-  gap: 18px;
+  gap: 15px;
 }
 
 .ai-block {
@@ -639,25 +1470,25 @@ body {
 
   border-radius: 10px;
 
-  padding: 18px;
+  padding: 17px;
 }
 
-.ai-block-title {
+.block-title {
   color: #667085;
 
-  font-size: 11px;
+  font-size: 10px;
 
   font-weight: 800;
 
-  letter-spacing: 0.8px;
+  letter-spacing: .8px;
 
-  margin-bottom: 9px;
+  margin-bottom: 8px;
 }
 
-.ai-block-content {
+.block-content {
   color: #344054;
 
-  font-size: 14px;
+  font-size: 13px;
 
   line-height: 1.6;
 }
@@ -680,10 +1511,65 @@ body {
     Consolas,
     monospace;
 
-  font-size: 13px;
+  font-size: 12px;
 
   line-height: 1.5;
 }
+
+.clean-ai {
+  display: flex;
+
+  align-items: center;
+
+  gap: 16px;
+
+  background: white;
+
+  padding: 24px;
+
+  border-radius:
+    0 0 14px 14px;
+
+  box-shadow:
+    0 2px 10px
+    rgba(0,0,0,.05);
+}
+
+.clean-icon {
+  width: 42px;
+
+  height: 42px;
+
+  border-radius: 50%;
+
+  display: flex;
+
+  align-items: center;
+
+  justify-content: center;
+
+  background: #ecfdf3;
+
+  color: #087443;
+
+  font-size: 22px;
+
+  font-weight: 800;
+}
+
+.clean-ai strong {
+  font-size: 15px;
+}
+
+.clean-ai p {
+  color: #667085;
+
+  margin: 4px 0 0;
+
+  font-size: 13px;
+}
+
+/* TABLE */
 
 .table-container {
   background: white;
@@ -693,7 +1579,8 @@ body {
   overflow: hidden;
 
   box-shadow:
-    0 2px 10px rgba(0,0,0,0.05);
+    0 2px 10px
+    rgba(0,0,0,.05);
 }
 
 table {
@@ -704,7 +1591,7 @@ table {
 
 th,
 td {
-  padding: 18px 20px;
+  padding: 17px 20px;
 
   text-align: left;
 
@@ -713,33 +1600,15 @@ td {
 }
 
 th {
-  font-size: 13px;
+  background: #f9fafb;
 
   color: #667085;
 
-  background: #f9fafb;
-}
-
-.badge {
-  display: inline-block;
-
-  padding: 6px 10px;
-
-  border-radius: 999px;
-
   font-size: 12px;
-
-  font-weight: 700;
 }
 
-.pass {
-  background: #ecfdf3;
-  color: #087443;
-}
-
-.fail {
-  background: #fef3f2;
-  color: #b42318;
+td {
+  font-size: 13px;
 }
 
 .footer {
@@ -747,34 +1616,65 @@ th {
 
   color: #98a2b3;
 
-  font-size: 13px;
+  font-size: 12px;
 }
 
-@media(max-width: 800px) {
+@media(max-width: 900px) {
 
-  .cards {
+  .release-grid,
+  .cards,
+  .ai-summary-grid,
+  .intelligence {
     grid-template-columns:
       repeat(2, 1fr);
+  }
+
+  .application {
+    grid-template-columns: 1fr;
   }
 
   .ai-grid {
     grid-template-columns: 1fr;
   }
 
-  .ai-header {
+}
+
+@media(max-width: 600px) {
+
+  .container {
+    padding:
+      24px 14px 40px;
+  }
+
+  .header {
+    display: block;
+  }
+
+  .generated {
+    margin-top: 10px;
+  }
+
+  .release h1 {
+    font-size: 29px;
+  }
+
+  .release-grid,
+  .cards,
+  .ai-summary-grid,
+  .intelligence {
+    grid-template-columns: 1fr;
+  }
+
+  .app-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .section-header {
     flex-direction: column;
 
     align-items: flex-start;
 
     gap: 15px;
-  }
-
-}
-
-@media(max-width: 500px) {
-
-  .cards {
-    grid-template-columns: 1fr;
   }
 
 }
@@ -787,22 +1687,79 @@ th {
 
 <div class="container">
 
-  <div class="header">
+  <header class="header">
 
-    <div class="logo">
-      QYNTRA
+    <div>
+
+      <div class="logo">
+        QYNTRA
+      </div>
+
+      <div class="subtitle">
+        AI Quality Engineering · Release Intelligence
+      </div>
+
     </div>
 
-    <div class="subtitle">
-      Quality Engineering Intelligence
+    <div class="generated">
+      Generated ${new Date().toLocaleString()}
     </div>
 
-  </div>
+  </header>
 
-  <div class="cards">
+
+  <!-- RELEASE DECISION -->
+
+  <section class="release ${releaseClass}">
+
+    <div class="release-label">
+      QYNTRA QUALITY GATE
+    </div>
+
+    <h1>
+      ${qualityGatePassed ? '✓' : '⚠'}
+      ${releaseDecision}
+    </h1>
+
+    ${releaseMessage}
+
+    <div class="release-grid">
+
+      <div class="release-stat">
+        <span>TESTS</span>
+        <strong>${total}</strong>
+      </div>
+
+      <div class="release-stat">
+        <span>PASSED</span>
+        <strong>${passed}</strong>
+      </div>
+
+      <div class="release-stat">
+        <span>FAILED</span>
+        <strong>${failed}</strong>
+      </div>
+
+      <div class="release-stat">
+        <span>RISK</span>
+        <strong>
+          ${escapeHtml(
+            riskLevel
+          )}
+          ${riskScore}/10
+        </strong>
+      </div>
+
+    </div>
+
+  </section>
+
+
+  <!-- TEST METRICS -->
+
+  <section class="cards">
 
     <div class="card">
-
       <div class="card-title">
         TOTAL TESTS
       </div>
@@ -810,35 +1767,29 @@ th {
       <div class="number">
         ${total}
       </div>
-
     </div>
 
     <div class="card">
-
       <div class="card-title">
-        PASSED
+        EXECUTION SUCCESS
       </div>
 
       <div class="number">
-        ${passed}
+        ${executionRate}%
       </div>
-
     </div>
 
     <div class="card">
-
       <div class="card-title">
-        FAILED
+        GENERATED TESTS
       </div>
 
       <div class="number">
-        ${failed}
+        ${generatedTests}
       </div>
-
     </div>
 
     <div class="card">
-
       <div class="card-title">
         DURATION
       </div>
@@ -846,54 +1797,199 @@ th {
       <div class="number">
         ${duration}s
       </div>
+    </div>
+
+  </section>
+
+
+  <!-- APPLICATION -->
+
+  <section class="application">
+
+    <div class="panel">
+
+      <h2>
+        ${escapeHtml(
+          applicationTitle
+        )}
+      </h2>
+
+      <div class="panel-subtitle">
+        Application Under Test
+      </div>
+
+      <div class="app-url">
+        ${escapeHtml(
+          applicationUrl
+        )}
+      </div>
+
+      <div class="app-meta">
+
+        <div class="meta-box">
+          <span>FRAMEWORK</span>
+          <strong>
+            ${escapeHtml(
+              framework
+            )}
+          </strong>
+        </div>
+
+        <div class="meta-box">
+          <span>DYNAMIC DISCOVERY</span>
+          <strong>
+            ${dynamicDiscovery
+              ? '✓ DETECTED'
+              : 'NOT DETECTED'}
+          </strong>
+        </div>
+
+        <div class="meta-box">
+          <span>API ENDPOINTS</span>
+          <strong>
+            ${apiCount}
+          </strong>
+        </div>
+
+        <div class="meta-box">
+          <span>SCENARIOS</span>
+          <strong>
+            ${scenarioCount}
+          </strong>
+        </div>
+
+      </div>
 
     </div>
 
-  </div>
 
-  <div class="status">
+    <div class="panel">
 
-    <h2>
-      Quality Status
-    </h2>
+      <h2>
+        Discovered Capabilities
+      </h2>
 
-    <div class="status-value ${statusClass}">
-      ${failed === 0 ? '✓' : '✗'} ${status}
+      <div class="panel-subtitle">
+        Application-aware quality coverage
+      </div>
+
+      <div class="capabilities">
+        ${capabilityHtml}
+      </div>
+
+      <div class="intelligence">
+
+        <div class="intel-box">
+          <span>AUTH</span>
+          <strong>
+            ${authenticationDetected
+              ? 'Detected'
+              : 'Not detected'}
+          </strong>
+        </div>
+
+        <div class="intel-box">
+          <span>PAYMENT</span>
+          <strong>
+            ${paymentDetected
+              ? 'Detected'
+              : 'Not detected'}
+          </strong>
+        </div>
+
+        <div class="intel-box">
+          <span>TODO UI</span>
+          <strong>
+            ${todoDetected
+              ? 'Detected'
+              : 'Not detected'}
+          </strong>
+        </div>
+
+        <div class="intel-box">
+          <span>GENERATION</span>
+          <strong>
+            ${generationSkipped > 0
+              ? `${generationSkipped} skipped`
+              : 'Complete'}
+          </strong>
+        </div>
+
+      </div>
+
     </div>
 
-    ${failureSection}
+  </section>
 
-  </div>
+
+  <!-- AI -->
 
   ${aiSection}
 
-  <div class="table-container">
 
-    <table>
+  <!-- TEST RESULTS -->
 
-      <thead>
+  <section class="section">
 
-        <tr>
-          <th>Test</th>
-          <th>Status</th>
-          <th>Duration</th>
-        </tr>
+    <div class="section-header">
 
-      </thead>
+      <div>
 
-      <tbody>
+        <div class="eyebrow">
+          EXECUTION
+        </div>
 
-        ${rows}
+        <h2>
+          Test Results
+        </h2>
 
-      </tbody>
+        <p>
+          ${passed} passed ·
+          ${failed} failed ·
+          ${skipped} skipped
+        </p>
 
-    </table>
+      </div>
 
-  </div>
+      <div class="ai-count">
+        ${qualityStatus}
+      </div>
 
-  <div class="footer">
-    Generated by Qyntra QA Analyzer + AI Failure Intelligence
-  </div>
+    </div>
+
+    <div class="table-container">
+
+      <table>
+
+        <thead>
+
+          <tr>
+            <th>Test</th>
+            <th>Status</th>
+            <th>Duration</th>
+          </tr>
+
+        </thead>
+
+        <tbody>
+          ${rows}
+        </tbody>
+
+      </table>
+
+    </div>
+
+  </section>
+
+
+  <footer class="footer">
+
+    Qyntra · AI Quality Engineering ·
+    Risk Intelligence + Application Discovery +
+    Test Generation + Failure Intelligence +
+    Release Quality Gate
+
+  </footer>
 
 </div>
 
@@ -903,8 +1999,10 @@ th {
 `;
 
 fs.mkdirSync(
-  outputDir,
-  { recursive: true }
+  dashboardDir,
+  {
+    recursive: true
+  }
 );
 
 fs.writeFileSync(
@@ -913,43 +2011,63 @@ fs.writeFileSync(
 );
 
 console.log('');
-console.log('======================================');
-console.log(' QYNTRA DASHBOARD GENERATED');
-console.log('======================================');
-console.log('');
-console.log(`Dashboard: ${outputPath}`);
-console.log('');
-console.log(`Tests   : ${total}`);
-console.log(`Passed  : ${passed}`);
-console.log(`Failed  : ${failed}`);
-console.log(`Skipped : ${skipped}`);
-console.log(`Status  : ${status}`);
-
-if (
-  aiReport?.analyses &&
-  aiReport.analyses.length > 0
-) {
-  console.log(
-    `AI      : ${aiReport.analyses.length} failure(s) analyzed`
-  );
-} else {
-  console.log('AI      : No failure analysis available');
-}
-
-console.log('');
-console.log('Open with:');
-console.log('open qyntra-dashboard/index.html');
+console.log(
+  '======================================'
+);
+console.log(
+  ' QYNTRA RELEASE INTELLIGENCE DASHBOARD'
+);
+console.log(
+  '======================================'
+);
 console.log('');
 
-function escapeHtml(value: unknown): string {
-  if (value === null || value === undefined) {
-    return '';
-  }
+console.log(
+  `Dashboard: ${outputPath}`
+);
 
-  return String(value)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#039;');
-}
+console.log('');
+
+console.log(
+  `Tests   : ${total}`
+);
+
+console.log(
+  `Passed  : ${passed}`
+);
+
+console.log(
+  `Failed  : ${failed}`
+);
+
+console.log(
+  `Skipped : ${skipped}`
+);
+
+console.log(
+  `Risk    : ${riskLevel} (${riskScore}/10)`
+);
+
+console.log(
+  `Status  : ${qualityStatus}`
+);
+
+console.log(
+  `Release : ${releaseDecision}`
+);
+
+console.log(
+  `AI      : ${aiFailureCount} failure(s) analyzed`
+);
+
+console.log('');
+
+console.log(
+  'Open with:'
+);
+
+console.log(
+  `open ${outputPath}`
+);
+
+console.log('');

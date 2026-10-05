@@ -1,0 +1,21 @@
+{
+  "app": {
+    "name": "Peak Platform",
+    "baseUrl": "https://platform.peak.ai/login"
+  },
+  "requirements": [
+    "User can log in to the Peak platform"
+  ],
+  "output": {
+    "dir": "qyntra-out-peak"
+  },
+  "discovery": {
+    "explore": false,
+    "maxActions": 10,
+    "timeoutMs": 30000
+  },
+  "ai": {
+    "provider": "ollama",
+    "model": "qwen2.5-coder:7b"
+  }
+}

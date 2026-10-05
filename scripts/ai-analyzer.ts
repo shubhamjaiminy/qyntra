@@ -1,58 +1,147 @@
 import fs from 'fs';
-import path from 'path';
+import dotenv from 'dotenv';
 
-const dashboardDir = path.resolve('qyntra-dashboard');
+import {
+  FailureContext,
+  AIAnalysis as ProviderAIAnalysis,
+  AIProvider,
+  isProviderOutage,
+} from './ai/provider';
 
-const failuresPath = path.join(
-  dashboardDir,
-  'failures.json'
-);
+import { buildFailureContext } from './ai/context-builder';
+import {
+  createProvider,
+  describeProvider,
+} from './ai/create-provider';
+import { stageAIConfig } from './lib/config';
+import { stagePaths } from './lib/paths';
 
-const analysisPath = path.join(
-  dashboardDir,
-  'ai-analysis.json'
-);
+dotenv.config({ quiet: true });
+
+const paths = stagePaths();
+
+const failuresPath = paths.failures;
+const analysisPath = paths.aiAnalysis;
+
+// --------------------------------------------------
+// LOAD FAILURES
+// --------------------------------------------------
 
 if (!fs.existsSync(failuresPath)) {
-  console.error('failures.json not found.');
+  console.error(
+    'failures.json not found.'
+  );
   process.exit(1);
 }
 
 const data = JSON.parse(
-  fs.readFileSync(failuresPath, 'utf-8')
+  fs.readFileSync(
+    failuresPath,
+    'utf-8'
+  )
 );
 
-const failures = data.failures ?? [];
+const failures =
+  data.failures ?? [];
+
+// --------------------------------------------------
+// CLEAN RUN
+// --------------------------------------------------
 
 if (failures.length === 0) {
-  if (fs.existsSync(analysisPath)) {
-    fs.unlinkSync(analysisPath);
+  if (
+    fs.existsSync(analysisPath)
+  ) {
+    fs.unlinkSync(
+      analysisPath
+    );
   }
 
   console.log('');
-  console.log('No failures detected.');
-  console.log('AI analysis skipped.');
+  console.log(
+    'No failures detected.'
+  );
+  console.log(
+    'AI analysis: 0 failures.'
+  );
   console.log('');
 
   process.exit(0);
 }
 
-function analyzeFailure(failure: any) {
-  const error = String(
-    failure.error ?? ''
-  );
+// --------------------------------------------------
+// ANALYSIS SHAPE
+// --------------------------------------------------
 
-  const source = String(
-    failure.testSource ?? ''
-  );
+type Severity =
+  | 'Low'
+  | 'Medium'
+  | 'High'
+  | 'Critical';
 
-  const lower = error.toLowerCase();
+type Confidence =
+  | 'Low'
+  | 'Medium'
+  | 'High';
 
-  let severity = 'Medium';
-  let confidence = 'High';
+interface AnalysisResult {
+  test: string;
+  severity: Severity;
+  category: string;
+  confidence: Confidence;
+  file: string;
+  line: number;
+  rootCause: string;
+  whyItHappened: string;
+  recommendation: string;
+  suggestedFix: string;
+  suggestedCode: string;
+  stackTrace: string;
+  testSource: string;
+  isLikelyTestDefect: boolean;
+  isLikelyProductDefect: boolean;
+  /** True when the deterministic fallback produced this, not an LLM. */
+  degraded: boolean;
+}
+
+// --------------------------------------------------
+// DETERMINISTIC FALLBACK
+// --------------------------------------------------
+
+function analyzeDeterministic(
+  failure: any
+): AnalysisResult {
+  const error =
+    String(
+      failure.error ?? ''
+    );
+
+  const source =
+    String(
+      failure.testSource ?? ''
+    );
+
+  const lower =
+    error.toLowerCase();
+
+  // Playwright prints "Locator:", "Timeout:" and "waiting for" on every
+  // web-first assertion failure, so those words alone do not mean the
+  // locator or timing was wrong. "unexpected value" means the element
+  // resolved and held the wrong value: the assertion itself failed.
+  const isValueMismatch =
+    lower.includes(
+      'unexpected value'
+    );
+
+  let severity: Severity =
+    'Medium';
+
+  let confidence: Confidence =
+    'High';
 
   let category =
-    failure.category || 'Unknown / Environment';
+    failure.category ??
+    'Unknown / Environment';
 
   let rootCause =
     'The automated test failed during execution.';
@@ -61,59 +150,123 @@ function analyzeFailure(failure: any) {
     'The available failure information indicates an issue that requires investigation.';
 
   let recommendation =
-    failure.recommendation ||
+    failure.recommendation ??
     'Inspect the test failure and application behavior.';
 
   let suggestedFix =
     'Review the failing test and update it based on the observed application behavior.';
 
-  let suggestedCode = '';
+  let suggestedCode =
+    '';
 
-  // ----------------------------------------
-  // LOCATOR / STRICT MODE
-  // ----------------------------------------
+  let isLikelyTestDefect =
+    false;
+
+  let isLikelyProductDefect =
+    false;
+
+  // ------------------------------------------------
+  // LOCATOR / UI
+  // ------------------------------------------------
 
   if (
-    lower.includes('strict mode violation') ||
-    lower.includes('resolved to 2 elements') ||
-    lower.includes('resolved to multiple elements')
+    !isValueMismatch &&
+    (
+    lower.includes(
+      'strict mode violation'
+    ) ||
+    lower.includes(
+      'resolved to 2 elements'
+    ) ||
+    lower.includes(
+      'resolved to multiple elements'
+    ) ||
+    lower.includes(
+      'element(s) not found'
+    ) ||
+    lower.includes(
+      'element not found'
+    ) ||
+    lower.includes(
+      'does-not-exist'
+    ) ||
+    (
+      lower.includes(
+        'locator('
+      ) &&
+      (
+        lower.includes(
+          'not found'
+        ) ||
+        lower.includes(
+          'waiting for locator'
+        )
+      )
+    )
+    )
   ) {
-    severity = 'Medium';
-    category = 'Locator / UI';
-    confidence = 'High';
+    severity =
+      'Medium';
+
+    category =
+      'Locator / UI';
+
+    confidence =
+      'High';
+
+    isLikelyTestDefect =
+      true;
 
     rootCause =
-      'The Playwright locator matched multiple elements, so Playwright could not determine which element the test intended to interact with.';
+      'The test uses a locator that does not match the expected element in the current application UI.';
 
     whyItHappened =
-      'The test uses a broad locator such as getByRole("checkbox"), but the page contains more than one checkbox.';
+      'The selector may be invalid, stale, or may not identify the expected element. Playwright could not find the element targeted by the test.';
 
     recommendation =
-      'Use a locator that uniquely identifies the intended element. Prefer accessible names, labels, or stable test IDs.';
+      'Replace the invalid locator with a stable application-aware locator such as getByRole(), getByLabel(), getByPlaceholder(), or a validated CSS/test-id selector.';
 
     suggestedFix =
-      'Target the Todo checkbox by its accessible name instead of selecting every checkbox on the page.';
+      'Use the selector discovered during Qyntra application discovery and verify that it uniquely identifies the intended element.';
 
     suggestedCode =
-`const checkbox = page.getByRole('checkbox', {
-  name: 'Toggle Todo'
-});
+`const checkbox = todoItem.locator(
+  'input.toggle'
+);
+
+await expect(
+  checkbox
+).toBeVisible();
 
 await checkbox.check();`;
   }
 
-  // ----------------------------------------
+  // ------------------------------------------------
   // TIMEOUT
-  // ----------------------------------------
+  // ------------------------------------------------
 
   else if (
-    lower.includes('timeout') ||
-    lower.includes('timed out') ||
-    lower.includes('waiting for')
+    !isValueMismatch &&
+    (
+    lower.includes(
+      'timeout'
+    ) ||
+    lower.includes(
+      'timed out'
+    ) ||
+    lower.includes(
+      'waiting for'
+    )
+    )
   ) {
-    severity = 'High';
-    category = 'Timeout / Synchronization';
-    confidence = 'High';
+    severity =
+      'High';
+
+    category =
+      'Timeout / Synchronization';
+
+    confidence =
+      'High';
 
     rootCause =
       'The test waited for an element or application state that was not reached within the configured timeout.';
@@ -128,29 +281,41 @@ await checkbox.check();`;
       'Replace arbitrary waits with Playwright auto-waiting and explicit state assertions.';
 
     suggestedCode =
-`await expect(page.getByRole('button', {
-  name: 'Submit'
-})).toBeVisible();
+`await expect(
+  page.getByRole('button', {
+    name: 'Submit'
+  })
+).toBeVisible();
 
-await page.getByRole('button', {
-  name: 'Submit'
-}).click();`;
+await page.getByRole(
+  'button',
+  {
+    name: 'Submit'
+  }
+).click();`;
   }
 
-  // ----------------------------------------
-  // API
-  // ----------------------------------------
+  // ------------------------------------------------
+  // API / NETWORK
+  // ------------------------------------------------
 
   else if (
     lower.includes('401') ||
     lower.includes('403') ||
     lower.includes('404') ||
     lower.includes('500') ||
-    lower.includes('econnrefused')
+    lower.includes(
+      'econnrefused'
+    )
   ) {
-    severity = 'High';
-    category = 'API / Network';
-    confidence = 'High';
+    severity =
+      'High';
+
+    category =
+      'API / Network';
+
+    confidence =
+      'High';
 
     rootCause =
       'The API request returned an unsuccessful response or the target service could not be reached.';
@@ -165,24 +330,46 @@ await page.getByRole('button', {
       'Validate the API contract and fail with a clear assertion when the response does not match the expected status.';
 
     suggestedCode =
-`const response = await request.get('/api/resource');
+`const response =
+  await request.get(
+    '/api/resource'
+  );
 
-expect(response.ok()).toBeTruthy();
-expect(response.status()).toBe(200);`;
+expect(
+  response.ok()
+).toBeTruthy();
+
+expect(
+  response.status()
+).toBe(200);`;
   }
 
-  // ----------------------------------------
+  // ------------------------------------------------
   // ASSERTION
-  // ----------------------------------------
+  // ------------------------------------------------
 
   else if (
-    lower.includes('expect(') ||
-    lower.includes('expected') ||
-    lower.includes('received')
+    lower.includes(
+      'expect('
+    ) ||
+    lower.includes(
+      'expected'
+    ) ||
+    lower.includes(
+      'received'
+    )
   ) {
-    severity = 'High';
-    category = 'Functional / Assertion';
-    confidence = 'Medium';
+    severity =
+      'High';
+
+    category =
+      'Functional / Assertion';
+
+    confidence =
+      'Medium';
+
+    isLikelyProductDefect =
+      true;
 
     rootCause =
       'The application returned a value that did not match the expected behavior defined by the test.';
@@ -198,20 +385,26 @@ expect(response.status()).toBe(200);`;
 
     suggestedCode =
 `await expect(
-  page.getByText('Expected value')
+  page.getByText(
+    'Expected value'
+  )
 ).toBeVisible();`;
   }
 
-  // ----------------------------------------
+  // ------------------------------------------------
   // UNKNOWN
-  // ----------------------------------------
+  // ------------------------------------------------
 
   else {
-    severity = 'Medium';
-    category =
-      failure.category || 'Unknown / Environment';
+    severity =
+      'Medium';
 
-    confidence = 'Low';
+    category =
+      failure.category ??
+      'Unknown / Environment';
+
+    confidence =
+      'Low';
 
     rootCause =
       'The available failure information is insufficient to confidently identify the underlying cause.';
@@ -227,12 +420,13 @@ expect(response.status()).toBe(200);`;
 
     suggestedCode =
 `// Investigate the first meaningful
-// application/test error before changing
-// the assertion or locator.`;
+// application/test error before
+// changing the assertion or locator.`;
   }
 
   return {
-    test: failure.test,
+    test:
+      failure.test,
 
     severity,
 
@@ -240,9 +434,11 @@ expect(response.status()).toBe(200);`;
 
     confidence,
 
-    file: failure.file,
+    file:
+      failure.file,
 
-    line: failure.line,
+    line:
+      failure.line,
 
     rootCause,
 
@@ -254,132 +450,486 @@ expect(response.status()).toBe(200);`;
 
     suggestedCode,
 
-    stackTrace: error,
+    stackTrace:
+      error,
 
-    testSource: source
+    testSource:
+      source,
+
+    isLikelyTestDefect,
+
+    isLikelyProductDefect,
+
+    degraded:
+      true,
   };
 }
 
-const analyses = failures.map(analyzeFailure);
+// --------------------------------------------------
+// AI PROVIDER
+// --------------------------------------------------
 
-const result = {
-  generatedAt: new Date().toISOString(),
+const aiConfig =
+  stageAIConfig();
 
-  summary: {
-    failuresAnalyzed: analyses.length,
+const providerLabel =
+  describeProvider(
+    aiConfig
+  );
 
-    critical: analyses.filter(
-      (x: any) => x.severity === 'Critical'
-    ).length,
+function loadAIProvider():
+  AIProvider | null {
+  if (
+    aiConfig.provider ===
+    'none'
+  ) {
+    console.log(
+      'AI provider is "none". Using deterministic analyzer.'
+    );
 
-    high: analyses.filter(
-      (x: any) => x.severity === 'High'
-    ).length,
+    return null;
+  }
 
-    medium: analyses.filter(
-      (x: any) => x.severity === 'Medium'
-    ).length,
+  if (
+    aiConfig.apiKeyEnv &&
+    !process.env[
+      aiConfig.apiKeyEnv
+    ]
+  ) {
+    console.log(
+      `${aiConfig.apiKeyEnv} not configured.`
+    );
 
-    low: analyses.filter(
-      (x: any) => x.severity === 'Low'
-    ).length
-  },
+    console.log(
+      'Using deterministic analyzer.'
+    );
 
-  analyses
-};
+    return null;
+  }
 
-fs.writeFileSync(
-  analysisPath,
-  JSON.stringify(result, null, 2)
-);
+  try {
+    return createProvider(
+      aiConfig
+    );
 
-console.log('');
-console.log('╔════════════════════════════════════════════╗');
-console.log('║       QYNTRA AI FAILURE INTELLIGENCE       ║');
-console.log('╚════════════════════════════════════════════╝');
-console.log('');
+  } catch (error: any) {
+    console.log(
+      `AI provider unavailable: ${providerLabel}`
+    );
 
-console.log('AI Analysis Summary');
-console.log('────────────────────────────────────────────');
+    console.log(
+      error?.message ??
+      'Unknown provider error.'
+    );
 
-console.log(
-  `Failures Analyzed : ${analyses.length}`
-);
+    console.log(
+      'Using deterministic analyzer.'
+    );
 
-console.log(
-  `Critical          : ${result.summary.critical}`
-);
+    return null;
+  }
+}
 
-console.log(
-  `High              : ${result.summary.high}`
-);
+// --------------------------------------------------
+// CONFIDENCE
+// --------------------------------------------------
 
-console.log(
-  `Medium            : ${result.summary.medium}`
-);
+function confidenceToLabel(
+  value:
+    | number
+    | string
+    | undefined
+    | null
+): Confidence {
+  if (
+    value === undefined ||
+    value === null
+  ) {
+    return 'Medium';
+  }
 
-console.log(
-  `Low               : ${result.summary.low}`
-);
+  const numeric =
+    Number(value);
 
-console.log('');
+  if (
+    Number.isNaN(
+      numeric
+    )
+  ) {
+    const label =
+      String(value)
+        .trim()
+        .toLowerCase();
 
-analyses.forEach((analysis: any, index: number) => {
+    if (
+      label === 'high'
+    ) {
+      return 'High';
+    }
+
+    if (
+      label === 'low'
+    ) {
+      return 'Low';
+    }
+
+    return 'Medium';
+  }
+
+  if (
+    numeric >= 0.75
+  ) {
+    return 'High';
+  }
+
+  if (
+    numeric >= 0.4
+  ) {
+    return 'Medium';
+  }
+
+  return 'Low';
+}
+
+// --------------------------------------------------
+// EXECUTE
+// --------------------------------------------------
+
+async function main(): Promise<void> {
+  // `let` so an outage can switch it off for the remaining failures.
+  let provider =
+    loadAIProvider();
+
+  const analyses: AnalysisResult[] =
+    [];
+
+  for (
+    const failure of failures
+  ) {
+    const deterministic =
+      analyzeDeterministic(
+        failure
+      );
+
+    let analysis: AnalysisResult =
+      deterministic;
+
+    if (provider) {
+      try {
+        const context:
+          FailureContext =
+          buildFailureContext(
+            failure
+          );
+
+        const aiResult:
+          ProviderAIAnalysis =
+          await provider
+            .analyzeFailure(
+              context
+            );
+
+        analysis = {
+          test:
+            failure.test,
+
+          severity:
+            aiResult.severity ??
+            deterministic.severity,
+
+          category:
+            aiResult.category ??
+            deterministic.category,
+
+          confidence:
+            confidenceToLabel(
+              aiResult.confidence
+            ),
+
+          file:
+            failure.file,
+
+          line:
+            failure.line,
+
+          rootCause:
+            aiResult.rootCause ??
+            deterministic.rootCause,
+
+          whyItHappened:
+            aiResult.whyItHappened ??
+            deterministic.whyItHappened,
+
+          recommendation:
+            aiResult.recommendation ??
+            deterministic.recommendation,
+
+          suggestedFix:
+            aiResult.suggestedFix ??
+            deterministic.suggestedFix,
+
+          suggestedCode:
+            aiResult.suggestedCode ??
+            deterministic.suggestedCode,
+
+          stackTrace:
+            failure.error ??
+            '',
+
+          testSource:
+            failure.testSource ??
+            '',
+
+          isLikelyTestDefect:
+            !!aiResult.isLikelyTestDefect,
+
+          isLikelyProductDefect:
+            !!aiResult.isLikelyProductDefect,
+
+          degraded:
+            false,
+        };
+
+        console.log(
+          `✓ ${providerLabel} analyzed: ${failure.test}`
+        );
+
+      } catch (
+        error: any
+      ) {
+        console.error(
+          `⚠ ${providerLabel} failed for: ${failure.test}`
+        );
+
+        console.error(
+          `  ${error?.message ?? error}`
+        );
+
+        console.log(
+          '  Falling back to deterministic analysis.'
+        );
+
+        // Quota, auth and connection errors repeat on every call.
+        // Stop asking, rather than failing the same way N times.
+        if (
+          isProviderOutage(
+            error
+          )
+        ) {
+          console.log(
+            '  Provider unavailable; using deterministic analysis for the remaining failures.'
+          );
+
+          provider =
+            null;
+        }
+
+        analysis =
+          deterministic;
+      }
+    }
+
+    analyses.push(
+      analysis
+    );
+  }
+
+  // --------------------------------------------------
+  // REPORT
+  // --------------------------------------------------
+
+  const result = {
+    generatedAt:
+      new Date().toISOString(),
+
+    summary: {
+      failuresAnalyzed:
+        analyses.length,
+
+      critical:
+        analyses.filter(
+          (x: any) =>
+            x.severity ===
+            'Critical'
+        ).length,
+
+      high:
+        analyses.filter(
+          (x: any) =>
+            x.severity ===
+            'High'
+        ).length,
+
+      medium:
+        analyses.filter(
+          (x: any) =>
+            x.severity ===
+            'Medium'
+        ).length,
+
+      low:
+        analyses.filter(
+          (x: any) =>
+            x.severity ===
+            'Low'
+        ).length,
+    },
+
+    analyses,
+  };
+
+  fs.writeFileSync(
+    analysisPath,
+    JSON.stringify(
+      result,
+      null,
+      2
+    )
+  );
+
+  // --------------------------------------------------
+  // CONSOLE
+  // --------------------------------------------------
+
+  console.log('');
+
   console.log(
-    `[${index + 1}] ${analysis.test}`
+    '╔════════════════════════════════════════════╗'
   );
 
   console.log(
-    `Severity        : ${analysis.severity}`
+    '║       QYNTRA AI FAILURE INTELLIGENCE      ║'
   );
 
   console.log(
-    `Category        : ${analysis.category}`
-  );
-
-  console.log(
-    `Confidence      : ${analysis.confidence}`
-  );
-
-  console.log(
-    `File            : ${analysis.file}`
-  );
-
-  console.log(
-    `Line            : ${analysis.line}`
+    '╚════════════════════════════════════════════╝'
   );
 
   console.log('');
 
   console.log(
-    `Root Cause      : ${analysis.rootCause}`
+    `Failures Analyzed : ${analyses.length}`
   );
 
   console.log(
-    `Why It Happened : ${analysis.whyItHappened}`
+    `Critical          : ${result.summary.critical}`
   );
 
   console.log(
-    `Recommendation  : ${analysis.recommendation}`
+    `High              : ${result.summary.high}`
   );
 
   console.log(
-    `Suggested Fix   : ${analysis.suggestedFix}`
+    `Medium            : ${result.summary.medium}`
+  );
+
+  console.log(
+    `Low               : ${result.summary.low}`
   );
 
   console.log('');
 
-  console.log('Suggested Code');
-  console.log('--------------');
-  console.log(analysis.suggestedCode);
+  analyses.forEach(
+    (
+      analysis: any,
+      index: number
+    ) => {
+      console.log(
+        `[${index + 1}] ${analysis.test}`
+      );
 
-  console.log('');
-});
+      console.log(
+        `Severity        : ${analysis.severity}`
+      );
 
-console.log('════════════════════════════════════════════');
-console.log('Qyntra AI analysis complete.');
-console.log('════════════════════════════════════════════');
+      console.log(
+        `Category        : ${analysis.category}`
+      );
 
-console.log(
-  `AI report saved: ${analysisPath}`
-);
+      console.log(
+        `Confidence      : ${analysis.confidence}`
+      );
+
+      console.log(
+        `Test Defect     : ${analysis.isLikelyTestDefect ? 'YES' : 'NO'}`
+      );
+
+      console.log(
+        `Product Defect  : ${analysis.isLikelyProductDefect ? 'YES' : 'NO'}`
+      );
+
+      console.log('');
+
+      console.log(
+        `Root Cause      : ${analysis.rootCause}`
+      );
+
+      console.log(
+        `Why It Happened : ${analysis.whyItHappened}`
+      );
+
+      console.log(
+        `Recommendation  : ${analysis.recommendation}`
+      );
+
+      console.log(
+        `Suggested Fix   : ${analysis.suggestedFix}`
+      );
+
+      console.log('');
+
+      console.log(
+        'Suggested Code'
+      );
+
+      console.log(
+        '--------------'
+      );
+
+      console.log(
+        analysis.suggestedCode ??
+        ''
+      );
+
+      console.log('');
+    }
+  );
+
+  console.log(
+    '════════════════════════════════════════════'
+  );
+
+  console.log(
+    'Qyntra AI analysis complete.'
+  );
+
+  console.log(
+    '════════════════════════════════════════════'
+  );
+
+  console.log(
+    `AI report saved: ${analysisPath}`
+  );
+}
+
+// --------------------------------------------------
+// SAFE COMMONJS ENTRY POINT
+// --------------------------------------------------
+
+async function run(): Promise<void> {
+  try {
+    await main();
+  } catch (error) {
+    console.error('');
+    console.error(
+      'Qyntra AI analysis failed:'
+    );
+    console.error(
+      error
+    );
+
+    process.exitCode = 1;
+  }
+}
+
+run();
