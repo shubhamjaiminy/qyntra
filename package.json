@@ -1,23 +1,50 @@
 {
+  "name": "qyntra",
+  "version": "0.1.0",
+  "description": "AI Quality Engineer — turns requirements into executable tests, explains failures, and decides whether a release is safe.",
+  "license": "UNLICENSED",
+  "private": true,
+  "bin": {
+    "qyntra": "dist/cli.js"
+  },
+  "main": "dist/cli.js",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
     "@types/node": "^26.5.0",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2"
   },
+  "peerDependencies": {
+    "@playwright/test": ">=1.40.0"
+  },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "npm run typecheck && npm run build",
+    "typecheck": "tsc --noEmit",
+    "qyntra": "tsx scripts/cli.ts",
     "test": "playwright test",
+    "test:unit": "playwright test -c playwright.unit.config.ts",
     "test:headed": "playwright test --headed",
     "test:debug": "playwright test --debug",
-    "typecheck": "tsc --noEmit",
     "qa:analyze": "tsx scripts/analyze-failures.ts",
     "dashboard": "tsx scripts/generate-dashboard.ts",
     "qa": "npm test && npm run qa:analyze && npm run dashboard",
     "ai": "tsx scripts/ai-analyzer.ts",
     "generate:test": "tsx scripts/test-generator.ts",
     "analyze:risk": "tsx scripts/risk-analyzer.ts",
-    "qyntra": "tsx scripts/qyntra.ts",
     "discover": "tsx scripts/application-discovery.ts",
     "map:scenarios": "tsx scripts/scenario-mapper.ts"
+  },
+  "dependencies": {
+    "@google/genai": "^2.21.0",
+    "dotenv": "^17.4.2",
+    "openai": "^7.22.0"
   }
 }

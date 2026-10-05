@@ -14,7 +14,8 @@ test('user can create and complete a todo', async ({ page }) => {
 
 const checkbox = page.getByRole('checkbox', {
   name: 'Toggle Todo'
-});  await checkbox.check();
+});
+  await checkbox.check();
 
   await expect(todo).toHaveCSS(
     'text-decoration-line',

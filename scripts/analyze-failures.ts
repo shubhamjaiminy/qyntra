@@ -1,12 +1,15 @@
 import fs from 'fs';
-import path from 'path';
 
-const resultsPath = path.resolve('test-results/results.json');
-const dashboardDir = path.resolve('qyntra-dashboard');
-const failuresPath = path.join(
-  dashboardDir,
-  'failures.json'
-);
+import { stagePaths } from './lib/paths';
+
+// Artifact locations come from one resolver so this stage writes where
+// the CLI (and the customer's config) expects, instead of assuming the
+// process was started from the repo root.
+const paths = stagePaths();
+
+const resultsPath = paths.playwrightResults;
+const dashboardDir = paths.outputDir;
+const failuresPath = paths.failures;
 
 if (!fs.existsSync(resultsPath)) {
   console.error(
@@ -30,6 +33,16 @@ let skipped = 0;
 let duration = 0;
 
 const failures: any[] = [];
+
+/**
+ * Outcome of every test, not only the failures. Run history needs the
+ * passes too: without them a test that stopped being executed would be
+ * indistinguishable from one that keeps passing.
+ */
+const testOutcomes: {
+  test: string;
+  status: 'passed' | 'failed' | 'skipped';
+}[] = [];
 
 /**
  * Remove ANSI terminal formatting codes
@@ -78,11 +91,18 @@ function extractLocationFromStack(stack: string) {
 function classifyFailure(error: string) {
   const text = error.toLowerCase();
 
+  // Playwright prints "Locator:", "Timeout:" and "waiting for" on every
+  // web-first assertion failure, so those words alone do not mean the
+  // locator or timing was wrong. "unexpected value" means the element
+  // resolved and held the wrong value: the assertion itself failed.
+  const isValueMismatch = text.includes('unexpected value');
+
   if (
-    text.includes('strict mode violation') ||
-    text.includes('locator') ||
-    text.includes('element not found') ||
-    text.includes('resolved to multiple elements')
+    !isValueMismatch &&
+    (text.includes('strict mode violation') ||
+      text.includes('locator') ||
+      text.includes('element not found') ||
+      text.includes('resolved to multiple elements'))
   ) {
     return {
       category: 'Locator / UI',
@@ -93,9 +113,10 @@ function classifyFailure(error: string) {
   }
 
   if (
-    text.includes('timeout') ||
-    text.includes('timed out') ||
-    text.includes('waiting for')
+    !isValueMismatch &&
+    (text.includes('timeout') ||
+      text.includes('timed out') ||
+      text.includes('waiting for'))
   ) {
     return {
       category: 'Timeout / Synchronization',
@@ -231,6 +252,12 @@ function walkSuites(
 
       if (!test) {
         skipped++;
+
+        testOutcomes.push({
+          test: spec.title,
+          status: 'skipped'
+        });
+
         continue;
       }
 
@@ -260,6 +287,12 @@ function walkSuites(
         test.status === 'expected'
       ) {
         passed++;
+
+        testOutcomes.push({
+          test: spec.title,
+          status: 'passed'
+        });
+
         continue;
       }
 
@@ -268,6 +301,11 @@ function walkSuites(
         lastResult?.status === 'failed'
       ) {
         failed++;
+
+        testOutcomes.push({
+          test: spec.title,
+          status: 'failed'
+        });
 
         /**
          * Extract the error.
@@ -374,6 +412,11 @@ function walkSuites(
        * skipped/unresolved.
        */
       skipped++;
+
+      testOutcomes.push({
+        test: spec.title,
+        status: 'skipped'
+      });
     }
 
     /**
@@ -411,6 +454,8 @@ const output = {
     durationSeconds:
       (duration / 1000).toFixed(1)
   },
+
+  tests: testOutcomes,
 
   failures
 };

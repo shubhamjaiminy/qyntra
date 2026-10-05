@@ -28,11 +28,30 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Flakiness detection compares this run against previous ones, so
+      # the history file has to outlive the workspace. Without this the
+      # gate can still judge severity, but it can never tell a new
+      # regression from a test that has been red for a month.
+      #
+      # The key is unique per run so the cache is always written, and
+      # restore-keys pulls the most recent previous run's copy.
+      - name: Restore Qyntra run history
+        uses: actions/cache@v4
+        with:
+          path: qyntra-out/run-history.json
+          key: qyntra-history-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            qyntra-history-${{ github.ref_name }}-
+            qyntra-history-
+
       - name: Install Playwright
         run: npx playwright install --with-deps chromium
 
       - name: TypeScript validation
         run: npm run typecheck
+
+      - name: Run Qyntra unit tests
+        run: npm run test:unit
 
       - name: Run Qyntra tests
         run: npm test
@@ -49,8 +68,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: qyntra-dashboard
-          path: qyntra-dashboard/
+          name: qyntra-report
+          path: qyntra-out/
 
       - name: Upload Playwright report
         if: always()

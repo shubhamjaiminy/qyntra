@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "scripts",
+    "declaration": true,
+    "sourceMap": true,
+    "noEmit": false
+  },
+  "include": [
+    "scripts/**/*.ts"
+  ],
+  "exclude": [
+    "tests/**/*",
+    "playwright.config.ts",
+    "scripts/qyntra.ts"
+  ]
+}

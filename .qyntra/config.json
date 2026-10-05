@@ -1,0 +1,32 @@
+{
+  "app": {
+    "name": "TodoMVC Demo",
+    "baseUrl": "https://demo.playwright.dev/todomvc"
+  },
+  "requirements": [
+    "User can create and complete a todo"
+  ],
+  "output": {
+    "dir": "qyntra-out"
+  },
+  "discovery": {
+    "explore": true,
+    "maxActions": 25,
+    "timeoutMs": 30000
+  },
+  "execution": {
+    "generatedDir": "tests/generated",
+    "resultsFile": "test-results/results.json"
+  },
+  "ai": {
+    "provider": "ollama",
+    "model": "qwen2.5-coder:7b"
+  },
+  "gate": {
+    "maxCriticalFailures": 0,
+    "maxHighFailures": 0,
+    "minQualityScore": 80,
+    "allowLowSeverityFailures": true,
+    "blockOnProductDefect": true
+  }
+}
