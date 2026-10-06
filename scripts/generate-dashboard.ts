@@ -336,13 +336,20 @@ const generationSummary =
 // RELEASE DECISION
 // --------------------------------------------------
 
+// Zero tests is not a pass: nothing about this application was verified.
+const noEvidence =
+  total === 0;
+
 const qualityGatePassed =
-  failed === 0;
+  failed === 0 &&
+  !noEvidence;
 
 const releaseDecision =
   qualityGatePassed
     ? 'READY TO SHIP'
-    : 'RELEASE BLOCKED';
+    : noEvidence
+      ? 'BLOCKED — NO EVIDENCE'
+      : 'RELEASE BLOCKED';
 
 const releaseClass =
   qualityGatePassed
@@ -851,7 +858,19 @@ const releaseMessage =
         The current build is eligible for release.
       </p>
     `
-    : `
+    : noEvidence
+      ? `
+      <strong>
+        No tests were executed for this application.
+      </strong>
+
+      <p>
+        Qyntra could not generate a test it trusts for the
+        discovered scenarios, so this release is unverified.
+        See Test Generation for what was skipped and why.
+      </p>
+    `
+      : `
       <strong>
         ${failed} blocking test
         ${failed === 1 ? 'failure' : 'failures'}

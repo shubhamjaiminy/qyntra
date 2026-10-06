@@ -718,48 +718,6 @@ function generateDeleteTodoTest(
 }
 
 // --------------------------------------------------
-// GENERIC APPLICATION TEST
-// --------------------------------------------------
-
-function generateGenericTest(
-  scenario: Scenario
-): string {
-  const actions =
-    scenario.actions || [];
-
-  const actionComments =
-    actions
-      .map(
-        (action) =>
-          `  // ${action}`
-      )
-      .join('\n');
-
-  return `${createHeader(
-    scenario
-  )}test('${escapeSingleQuotes(
-    scenario.title
-  )}', async ({ page }) => {
-  await page.goto('${escapeSingleQuotes(
-    appUrl
-  )}');
-
-${actionComments}
-
-  // Qyntra discovered this scenario,
-  // but does not have enough application-specific
-  // evidence to safely invent selectors or assertions.
-
-  await expect(page).toHaveURL(
-    '${escapeSingleQuotes(
-      appUrl
-    )}'
-  );
-});
-`;
-}
-
-// --------------------------------------------------
 // ROUTER
 // --------------------------------------------------
 
@@ -907,12 +865,15 @@ function generateTest(
     }
   }
 
+  // A placeholder that only checks the URL passes against any page, so
+  // emitting it would count as evidence the scenario works. Skipping
+  // keeps the scenario visible as unverified instead.
   return {
-    content:
-      generateGenericTest(
-        scenario
-      ),
-    generated: true,
+    content: '',
+    generated: false,
+    reason:
+      'No application-specific generator for this scenario; ' +
+      'Qyntra will not count a placeholder test as evidence.',
   };
 }
 

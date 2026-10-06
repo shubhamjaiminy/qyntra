@@ -241,6 +241,7 @@ function runStage(
       env: {
         ...process.env,
         ...sessionEnv(config),
+        ...(config.configPath ? { QYNTRA_CONFIG: config.configPath } : {}),
         QYNTRA_OUTPUT_DIR: artifactPaths(config).outputDir,
         QYNTRA_BASE_URL: config.app.baseUrl,
       },
@@ -793,11 +794,25 @@ async function commandRun(args: ParsedArgs): Promise<number> {
 
   fs.mkdirSync(path.dirname(resultsFile), { recursive: true });
 
+  // A results file left by an earlier run must never be judged as this one.
+  fs.rmSync(resultsFile, { force: true });
+
+  // Only the tests generated for this application are evidence about it.
+  // Running all of tests/ once let unrelated suites pass a release Qyntra
+  // had generated nothing for. With nothing generated, Playwright still
+  // writes a zero-test report, which the gate blocks on.
+  const generatedFilter = path
+    .relative(config.rootDir, paths.generatedTests)
+    .split(path.sep)
+    .join('/');
+
   const testRun = spawnSync(
     process.execPath,
     [
       require.resolve('@playwright/test/cli'),
       'test',
+      `${generatedFilter}/`,
+      '--pass-with-no-tests',
       '--reporter=list,json',
     ],
     {
