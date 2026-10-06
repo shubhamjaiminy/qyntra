@@ -2,6 +2,10 @@ import fs from 'fs';
 import path from 'path';
 
 import { stagePaths } from './lib/paths';
+import {
+  renderLoginTestBody,
+  type LoginStructure,
+} from './lib/login-discovery';
 
 interface Scenario {
   id: number;
@@ -61,6 +65,8 @@ interface ApplicationMap {
     delete?: string | null;
     completed?: string | null;
   };
+
+  loginStructure?: LoginStructure;
 
   dynamicDiscovery?: {
     enabled?: boolean;
@@ -718,6 +724,54 @@ function generateDeleteTodoTest(
 }
 
 // --------------------------------------------------
+// LOGIN
+// --------------------------------------------------
+
+const LOGIN_SCENARIOS = [
+  'Login Form Is Displayed',
+  'Password Is Masked',
+  'Empty Credentials',
+  'Invalid Credentials',
+  'Successful Login',
+];
+
+function generateLoginTest(
+  scenario: Scenario,
+  login: LoginStructure
+): {
+  content: string;
+  generated: boolean;
+  reason?: string;
+} {
+  const rendered =
+    renderLoginTestBody(
+      scenario.title,
+      login,
+      appUrl
+    );
+
+  if ('skip' in rendered) {
+    return {
+      content: '',
+      generated: false,
+      reason: rendered.skip,
+    };
+  }
+
+  return {
+    content: `${createHeader(
+      scenario
+    )}test('${escapeSingleQuotes(
+      scenario.title
+    )}', async ({ page }) => {
+${rendered.body}
+});
+`,
+    generated: true,
+  };
+}
+
+// --------------------------------------------------
 // ROUTER
 // --------------------------------------------------
 
@@ -736,6 +790,18 @@ function generateTest(
     getCapability(
       scenario
     ).toLowerCase();
+
+  if (
+    application.loginStructure?.detected === true &&
+    LOGIN_SCENARIOS.includes(
+      scenario.title
+    )
+  ) {
+    return generateLoginTest(
+      scenario,
+      application.loginStructure
+    );
+  }
 
   if (
     todoDetected ||

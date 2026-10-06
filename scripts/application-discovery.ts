@@ -4,6 +4,11 @@ import fs from 'fs';
 
 import { stagePaths } from './lib/paths';
 import { BROWSER_PROFILE } from './lib/auth';
+import {
+  detectLoginForm,
+  probeLoginForm,
+  type LoginStructure,
+} from './lib/login-discovery';
 
 interface ElementInfo {
   [key: string]: unknown;
@@ -47,6 +52,8 @@ interface ApplicationMap {
   capabilities: ElementInfo[];
 
   todoStructure: TodoStructure;
+
+  loginStructure: LoginStructure;
 
   dynamicDiscovery: {
     enabled: boolean;
@@ -626,6 +633,23 @@ async function detectTodoStructure(
     }
   }
 
+  // Any <li> — a nav menu, a footer — used to count as a todo list and
+  // produced todo tests for login pages. Require a control in the item.
+  const hasItemControls =
+    (await checkbox.count()) > 0 ||
+    (await deleteButton.count()) > 0;
+
+  if (!hasItemControls) {
+    return {
+      detected: false,
+      container: null,
+      item: null,
+      checkbox: null,
+      delete: null,
+      completed: null,
+    };
+  }
+
   return {
     detected: true,
     container: 'ul',
@@ -1034,9 +1058,19 @@ async function discoverStatic(
     });
   }
 
+  // A checkbox alone is not todo evidence: login pages have
+  // "Remember me", which once became a "Complete Todo" scenario.
+  const todoEvidence =
+    Boolean(todoInput) ||
+    bodyText.includes('todo') ||
+    bodyText.includes('task');
+
   if (
-    checkboxes.length > 0 ||
-    bodyText.includes('complete')
+    todoEvidence &&
+    (
+      checkboxes.length > 0 ||
+      bodyText.includes('complete')
+    )
   ) {
     capabilities.push({
       name: 'Complete Todo',
@@ -1815,6 +1849,60 @@ async function main(): Promise<void> {
   }
 
   // ----------------------------------------------
+  // LOGIN FORM
+  // ----------------------------------------------
+
+  // Structural detection, then two probes that submit nothing a real
+  // account could match. Tests are later generated only from what the
+  // probes observed.
+  let loginStructure =
+    await detectLoginForm(
+      page,
+      page.url()
+    );
+
+  if (loginStructure.detected) {
+    console.log(
+      'LOGIN FORM  : detected — probing with an empty and an invalid submit'
+    );
+
+    loginStructure =
+      await probeLoginForm(
+        page,
+        url,
+        loginStructure
+      );
+
+    const authentication =
+      staticData.capabilities.find(
+        (capability) =>
+          capability.name ===
+          'Authentication'
+      );
+
+    const authEvidence =
+      loginStructure.evidence.join(
+        '; '
+      );
+
+    if (authentication) {
+      authentication.confidence =
+        'high';
+      authentication.evidence =
+        authEvidence;
+    } else {
+      staticData.capabilities.push({
+        name:
+          'Authentication',
+        confidence:
+          'high',
+        evidence:
+          authEvidence,
+      });
+    }
+  }
+
+  // ----------------------------------------------
   // NETWORK ANALYSIS
   // ----------------------------------------------
 
@@ -1906,6 +1994,8 @@ async function main(): Promise<void> {
 
       todoStructure:
         staticData.todoStructure,
+
+      loginStructure,
 
       dynamicDiscovery: {
         enabled:

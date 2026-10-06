@@ -469,3 +469,26 @@ test.describe('release decision with run history', () => {
     expect(decision.qualityScore).toBe(Math.max(summed, 0));
   });
 });
+
+test.describe('release decision with scenario coverage', () => {
+  test('an untested P0 scenario turns SAFE into SAFE_WITH_RISK', () => {
+    // A login page with its happy path untested once read as
+    // "SAFE, High confidence" because every test that did run passed.
+    const decision = decideRelease(
+      inputs({ coverage: { unverifiedCritical: ['Successful Login'] } })
+    );
+
+    expect(decision.verdict).toBe('SAFE_WITH_RISK');
+    expect(decision.decisionConfidence).toBe('Medium');
+    expect(decision.warnings.join(' ')).toContain('Successful Login');
+  });
+
+  test('full P0 coverage leaves a clean run SAFE', () => {
+    const decision = decideRelease(
+      inputs({ coverage: { unverifiedCritical: [] } })
+    );
+
+    expect(decision.verdict).toBe('SAFE');
+    expect(decision.decisionConfidence).toBe('High');
+  });
+});

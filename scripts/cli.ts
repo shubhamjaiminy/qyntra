@@ -512,6 +512,10 @@ interface AIAnalysisArtifact {
   }[];
 }
 
+interface GenerationArtifact {
+  files?: { scenario?: string; priority?: string; status?: string }[];
+}
+
 interface RiskArtifact {
   riskLevel?: string;
   riskScore?: number;
@@ -547,6 +551,9 @@ function buildDecision(
 
   const riskArtifact =
     readOptionalArtifact<RiskArtifact>(paths.riskAnalysis);
+
+  const generationArtifact =
+    readOptionalArtifact<GenerationArtifact>(paths.generationSummary);
 
   const summary = failuresArtifact?.summary ?? {};
 
@@ -646,6 +653,12 @@ function buildDecision(
     history: {
       available: priorRuns.length > 0,
       runsCompared: priorRuns.length,
+    },
+
+    coverage: generationArtifact && {
+      unverifiedCritical: (generationArtifact.files ?? [])
+        .filter((file) => file.priority === 'P0' && file.status === 'SKIPPED')
+        .map((file) => String(file.scenario ?? 'Unnamed scenario')),
     },
   });
 
