@@ -733,6 +733,9 @@ function commandGate(args: ParsedArgs): number {
   writeArtifact(paths.releaseDecision, {
     generatedAt: new Date().toISOString(),
     application: config.app.name,
+    // Lets the dashboard refuse a decision made about other results.
+    resultsGeneratedAt:
+      readOptionalArtifact<FailuresArtifact>(paths.failures)?.generatedAt,
     ...decision,
   });
 
@@ -849,11 +852,15 @@ async function commandRun(args: ParsedArgs): Promise<number> {
 
   runStage('FAILURE AGGREGATION', 'analyze-failures', [], config);
   runStage('FAILURE INTELLIGENCE', 'ai-analyzer', [], config);
-  runStage('REPORTING', 'generate-dashboard', [], config);
 
   log.debug(`Playwright exit status: ${testRun.status ?? 'unknown'}`);
 
-  return commandGate(args);
+  // Gate first: the dashboard displays the gate's verdict, not its own.
+  const gateStatus = commandGate(args);
+
+  runStage('REPORTING', 'generate-dashboard', [], config);
+
+  return gateStatus;
 }
 
 // --------------------------------------------------

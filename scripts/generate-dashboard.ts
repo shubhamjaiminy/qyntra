@@ -57,6 +57,7 @@ type AIReport = {
 };
 
 type FailureReport = {
+  generatedAt?: string;
   summary?: {
     total?: number;
     passed?: number;
@@ -65,6 +66,15 @@ type FailureReport = {
     durationSeconds?: string;
   };
   failures?: unknown[];
+};
+
+type GateDecision = {
+  resultsGeneratedAt?: string;
+  verdict?: 'SAFE' | 'SAFE_WITH_RISK' | 'UNSAFE';
+  qualityScore?: number;
+  decisionConfidence?: string;
+  blockingReasons?: string[];
+  warnings?: string[];
 };
 
 type RiskReport = {
@@ -336,33 +346,68 @@ const generationSummary =
 // RELEASE DECISION
 // --------------------------------------------------
 
-// Zero tests is not a pass: nothing about this application was verified.
+// The release call is the gate's alone. The dashboard once made its
+// own (`failed === 0`), and showed READY TO SHIP while the gate said
+// SAFE_WITH_RISK. A decision is used only if it judged these results;
+// a stale one is worse than none.
 const noEvidence =
   total === 0;
 
-const qualityGatePassed =
+const gateArtifact =
+  readJson<GateDecision>(
+    paths.releaseDecision
+  );
+
+const gateDecision =
+  gateArtifact &&
+  failureReport?.generatedAt &&
+  gateArtifact.resultsGeneratedAt ===
+    failureReport.generatedAt
+    ? gateArtifact
+    : null;
+
+const verdict =
+  gateDecision?.verdict ?? null;
+
+const releaseDecision =
+  verdict === 'SAFE'
+    ? 'READY TO SHIP'
+    : verdict === 'SAFE_WITH_RISK'
+      ? 'SHIP WITH RISK'
+      : verdict === 'UNSAFE'
+        ? noEvidence
+          ? 'BLOCKED — NO EVIDENCE'
+          : 'RELEASE BLOCKED'
+        : 'NOT YET DECIDED';
+
+const releaseIcon =
+  verdict === 'SAFE'
+    ? '✓'
+    : verdict === null
+      ? '…'
+      : '⚠';
+
+const releaseClass =
+  verdict === 'SAFE'
+    ? 'release-ready'
+    : verdict === 'SAFE_WITH_RISK'
+      ? 'release-risk'
+      : verdict === 'UNSAFE'
+        ? 'release-blocked'
+        : 'release-pending';
+
+// Health of the test run itself, separate from the release call.
+const testsHealthy =
   failed === 0 &&
   !noEvidence;
 
-const releaseDecision =
-  qualityGatePassed
-    ? 'READY TO SHIP'
-    : noEvidence
-      ? 'BLOCKED — NO EVIDENCE'
-      : 'RELEASE BLOCKED';
-
-const releaseClass =
-  qualityGatePassed
-    ? 'release-ready'
-    : 'release-blocked';
-
 const qualityStatus =
-  qualityGatePassed
+  testsHealthy
     ? 'HEALTHY'
     : 'ATTENTION REQUIRED';
 
 const qualityStatusClass =
-  qualityGatePassed
+  testsHealthy
     ? 'healthy'
     : 'failed';
 
@@ -846,42 +891,56 @@ const capabilityHtml =
 // RELEASE MESSAGE
 // --------------------------------------------------
 
+const gateReasons =
+  verdict === 'UNSAFE'
+    ? gateDecision?.blockingReasons ?? []
+    : gateDecision?.warnings ?? [];
+
+const releaseHeadline =
+  verdict === 'SAFE'
+    ? 'Every check passed and nothing critical is unverified.'
+    : verdict === 'SAFE_WITH_RISK'
+      ? 'No blocking failures, but the release carries known risk.'
+      : verdict === 'UNSAFE'
+        ? noEvidence
+          ? 'No tests were executed for this application.'
+          : 'The quality gate blocked this release.'
+        : 'The quality gate has not judged these results yet.';
+
 const releaseMessage =
-  qualityGatePassed
+  verdict === null
     ? `
       <strong>
-        All automated quality checks passed.
+        ${escapeHtml(releaseHeadline)}
       </strong>
 
       <p>
-        No blocking test failures were detected.
-        The current build is eligible for release.
+        Run <code>qyntra gate</code> to decide the release.
+        This dashboard shows only the gate's verdict.
       </p>
     `
-    : noEvidence
-      ? `
+    : `
       <strong>
-        No tests were executed for this application.
+        ${escapeHtml(releaseHeadline)}
       </strong>
 
       <p>
-        Qyntra could not generate a test it trusts for the
-        discovered scenarios, so this release is unverified.
-        See Test Generation for what was skipped and why.
+        Quality score
+        ${escapeHtml(gateDecision?.qualityScore ?? 0)}/100 ·
+        ${escapeHtml(gateDecision?.decisionConfidence ?? 'Unknown')}
+        confidence
       </p>
-    `
-      : `
-      <strong>
-        ${failed} blocking test
-        ${failed === 1 ? 'failure' : 'failures'}
-        detected.
-      </strong>
 
-      <p>
-        Qyntra recommends fixing the detected
-        quality issue${failed === 1 ? '' : 's'}
-        before release.
-      </p>
+      ${
+        gateReasons.length > 0
+          ? `<ul>${gateReasons
+              .map(
+                (reason) =>
+                  `<li>${escapeHtml(reason)}</li>`
+              )
+              .join('')}</ul>`
+          : ''
+      }
     `;
 
 // --------------------------------------------------
@@ -984,6 +1043,24 @@ body {
       135deg,
       #087443,
       #0b8f55
+    );
+}
+
+.release-risk {
+  background:
+    linear-gradient(
+      135deg,
+      #b54708,
+      #dc6803
+    );
+}
+
+.release-pending {
+  background:
+    linear-gradient(
+      135deg,
+      #475467,
+      #667085
     );
 }
 
@@ -1736,7 +1813,7 @@ td {
     </div>
 
     <h1>
-      ${qualityGatePassed ? '✓' : '⚠'}
+      ${releaseIcon}
       ${releaseDecision}
     </h1>
 
