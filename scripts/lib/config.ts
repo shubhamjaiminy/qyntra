@@ -174,6 +174,30 @@ export interface RemediationConfig {
   maxRepairs: number;
 }
 
+/**
+ * API testing beyond observed traffic. All optional: without an
+ * `openapi` spec, API tests come from what discovery observed.
+ */
+export interface ApiConfig {
+  /** OpenAPI 3.x document: a path relative to the repo, or a URL. */
+  openapi?: string;
+
+  /** Overrides the spec's servers[0], e.g. a staging host. */
+  baseUrl?: string;
+
+  /** Values for required parameters by name: { "petId": "10" }. */
+  parameters: Record<string, string>;
+
+  /** Path substrings to leave untested: ["/admin"]. */
+  exclude: string[];
+
+  /**
+   * Credential for operations the spec marks as secured: the header to
+   * send and the env var holding its value. Never the value itself.
+   */
+  auth?: { header: string; env: string };
+}
+
 export interface QyntraConfig {
   app: AppConfig;
   requirements: string[];
@@ -183,6 +207,7 @@ export interface QyntraConfig {
   ai: AIConfig;
   gate: GateConfig;
   remediation: RemediationConfig;
+  api: ApiConfig;
 
   /** Absolute path of the loaded config file, if any. */
   readonly configPath?: string;
@@ -244,6 +269,11 @@ function defaults(rootDir: string): QyntraConfig {
     remediation: {
       enabled: true,
       maxRepairs: 5,
+    },
+
+    api: {
+      parameters: {},
+      exclude: [],
     },
 
     rootDir,
@@ -726,9 +756,84 @@ export function loadConfig(
 
     remediation: resolveRemediationConfig(merged.remediation),
 
+    api: resolveApiConfig(merged.api),
+
     configPath,
     rootDir,
   };
+}
+
+export function resolveApiConfig(raw: unknown): ApiConfig {
+  const api = isPlainObject(raw) ? raw : {};
+
+  const parameters: Record<string, string> = {};
+
+  if (api.parameters !== undefined) {
+    if (!isPlainObject(api.parameters)) {
+      throw new ConfigError(
+        'Config field "api.parameters" must be an object of name → value.',
+        'Example: "parameters": { "petId": "10" }'
+      );
+    }
+
+    for (const [name, value] of Object.entries(api.parameters)) {
+      parameters[name] = String(value);
+    }
+  }
+
+  let auth: ApiConfig['auth'];
+
+  if (api.auth !== undefined) {
+    const block = isPlainObject(api.auth) ? api.auth : {};
+
+    auth = {
+      header: assertNonEmptyString(
+        block.header,
+        'api.auth.header',
+        'The header to send, e.g. "Authorization" or "api_key".'
+      ),
+      env: assertNonEmptyString(
+        block.env,
+        'api.auth.env',
+        'The environment variable holding the credential, e.g. "QYNTRA_API_TOKEN".'
+      ),
+    };
+  }
+
+  return {
+    ...(api.openapi !== undefined
+      ? {
+          openapi: assertNonEmptyString(
+            api.openapi,
+            'api.openapi',
+            'A path like "openapi.yaml" or a URL to the spec.'
+          ),
+        }
+      : {}),
+    ...(api.baseUrl !== undefined
+      ? { baseUrl: validateUrl(String(api.baseUrl), 'api.baseUrl').replace(/\/+$/, '') }
+      : {}),
+    parameters,
+    exclude: Array.isArray(api.exclude) ? api.exclude.map((entry) => String(entry)) : [],
+    ...(auth ? { auth } : {}),
+  };
+}
+
+/** Lenient stage-level read, like stageAIConfig(). */
+export function stageApiConfig(rootDir: string = process.cwd()): ApiConfig {
+  const configPath = findConfigFile(rootDir);
+
+  let raw: unknown = {};
+
+  if (configPath !== undefined) {
+    try {
+      raw = JSON.parse(fs.readFileSync(configPath, 'utf-8'))?.api ?? {};
+    } catch {
+      // `qyntra doctor` reports the malformed file precisely.
+    }
+  }
+
+  return resolveApiConfig(raw);
 }
 
 export function resolveRemediationConfig(raw: unknown): RemediationConfig {

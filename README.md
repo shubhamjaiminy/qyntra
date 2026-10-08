@@ -279,6 +279,62 @@ What Qyntra deliberately does not do:
 IDs in paths are generalised (`/api/articles/{id}`), so one endpoint
 observed with many records yields one test.
 
+### From an OpenAPI spec
+
+A browser only calls the endpoints its pages use. Point Qyntra at your
+OpenAPI 3.x spec (JSON or YAML, a repository path or a URL) and it tests
+what the API **documents**:
+
+```json
+"api": {
+  "openapi": "openapi.yaml",
+  "baseUrl": "https://staging-api.acme.example",
+  "parameters": { "petId": "10", "orderId": "1" },
+  "exclude": ["/admin", "/internal"],
+  "auth": { "header": "Authorization", "env": "QYNTRA_API_TOKEN" }
+}
+```
+
+Only `openapi` is required. For each GET operation Qyntra generates:
+
+| Test | When |
+| ---- | ---- |
+| Matches its documented contract — status, content type, and every **required** property with its type | Always, if Qyntra can authenticate |
+| Refuses anonymous access (401/403) | The spec marks the operation as secured |
+| Returns 404 for an unknown id | The spec documents a 404 |
+
+The spec is a stronger source than observation: it says which fields
+are required, so optional ones never cause false failures. Where an
+endpoint is both documented and observed, the documented contract wins.
+
+Values for required parameters come from `api.parameters`, then the
+spec's `example`, `examples`, `default` or first `enum` value. An
+operation Qyntra has no value for is skipped and named, with the fix:
+
+```
+– GET /pet/{petId}: Needs a value for path parameter "petId": add an
+  example to the spec, or set api.parameters in .qyntra/config.json.
+```
+
+Secured operations get a contract test only when `api.auth` names a
+header and the environment variable that holds its value — never the
+value itself. Without it, only their anonymous refusal is tested.
+
+Skipped on purpose, and listed in `qyntra-out/api-generation.json`:
+every write; GETs whose name suggests they change state or handle
+credentials (`/logout`, `/login`, `/reset`, `/token` — specs document
+these as GET often enough that "GET is safe" cannot be trusted);
+operations taking credential-like parameters; deprecated operations.
+
+`qyntra doctor` loads the spec and reports how much of it is testable
+(`OpenAPI spec : Shop API 2.1.0 — 14 of 31 operations testable`), so a
+wrong path or URL fails before a run, not during one.
+
+Against the public Swagger Petstore demo, the generated tests found that
+endpoints the spec marks as secured accept anonymous requests, that
+`/store/inventory` returns 500, and that an unknown user returns 500
+instead of the documented 404 — with no hand-written tests.
+
 ---
 
 ## Repairing broken tests
@@ -306,7 +362,10 @@ warnings. Your test files change only when you ask:
 npx qyntra repair --apply
 ```
 
-Failures attributed to the **product** are never repaired. Changing a
+Failures attributed to the **product** are never repaired, and neither
+are Qyntra's own generated tests: they are rewritten on every run, and
+"repairing" a generated security test into accepting anonymous access
+would hide exactly what it found. Fix their inputs instead. Changing a
 test to agree with a bug is the one thing a quality gate must not do.
 
 ### What a repair may not do
@@ -650,12 +709,12 @@ your own CI cache. Qyntra has nowhere to send it.
 
 Stated plainly, because you will find them anyway:
 
-- **API tests cover reads the app was seen making.** Contract tests are
-  generated from GET traffic observed during discovery, so endpoints the
-  reached pages never call are not tested, and mutating calls are never
-  replayed. There is no OpenAPI input yet. Performance testing is a
-  response-time budget, not load testing; LLM-feature testing is not
-  implemented.
+- **API tests are read-only.** Contract tests come from GET traffic
+  observed during discovery and from GET operations in your OpenAPI
+  spec; writes are never called. Swagger 2.0 must be converted to
+  OpenAPI 3.x first, and external `$ref`s are not followed. Performance
+  testing is a response-time budget, not load testing; LLM-feature
+  testing is not implemented.
 - **The codebase is not an input.** Discovery is black-box. Risk is
   derived from the application surface, not from your diff.
 - **Repair needs an AI provider and fixes test defects only.** Without

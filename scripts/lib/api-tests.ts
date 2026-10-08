@@ -82,22 +82,35 @@ export function generateApiSpecs(calls: ApiCall[]): ApiGeneration {
     const blocks: string[] = [];
 
     // A header token cannot be replayed: it lived in the page's memory
-    // or storage, not in the session file the tests run with.
-    if (call.auth === 'header') {
+    // or storage, not in the session file the tests run with — unless
+    // the config names an env var that holds one (api.auth).
+    if (call.auth === 'header' && !call.authHeader) {
       skipped.push({
         call: label,
         reason:
-          'Authenticated with a header token Qyntra cannot replay; only anonymous ' +
-          'access is tested.',
+          call.source === 'openapi'
+            ? 'Secured in the spec and no api.auth credential is configured; only ' +
+              'anonymous refusal is tested.'
+            : 'Authenticated with a header token Qyntra cannot replay; only anonymous ' +
+              'access is tested.',
       });
     } else {
-      tests.push(`${label} responds with the observed contract`);
+      tests.push(
+        `${label} ${call.source === 'openapi' ? 'matches its documented contract' : 'responds with the observed contract'}`
+      );
       blocks.push(contractTest(call, tests[tests.length - 1]));
     }
+
+    const hasContract = tests.length > 0;
 
     if (call.auth !== 'none') {
       tests.push(`${label} refuses anonymous access`);
       blocks.push(anonymousTest(call, tests[tests.length - 1]));
+    }
+
+    if (call.notFound) {
+      tests.push(`${label} returns ${call.notFound.status} for an unknown id`);
+      blocks.push(notFoundTest(call, tests[tests.length - 1]));
     }
 
     if (blocks.length === 0) {
@@ -109,11 +122,22 @@ export function generateApiSpecs(calls: ApiCall[]): ApiGeneration {
     specs.push({
       fileName: `api-${index}-${call.method.toLowerCase()}-${slug(call.template) || 'root'}.spec.ts`,
       tests,
-      source: specSource(call, blocks, call.responseShape !== undefined),
+      source: specSource(
+        call,
+        blocks,
+        hasContract && call.responseShape !== undefined && /json/.test(call.contentType)
+      ),
     });
   }
 
   return { specs, skipped };
+}
+
+/** Request options sending the configured credential, if any. */
+function authOptions(call: ApiCall): string {
+  return call.authHeader
+    ? `, { headers: { ${literal(call.authHeader.name)}: credential() } }`
+    : '';
 }
 
 function contractTest(call: ApiCall, title: string): string {
@@ -122,10 +146,15 @@ function contractTest(call: ApiCall, title: string): string {
 
   const json = /json/.test(call.contentType);
 
+  const budgetNote =
+    call.durationMs > 0
+      ? `Observed in ${call.durationMs}ms; the budget allows for slower networks.`
+      : 'Not timed during discovery; the default budget applies.';
+
   return `
 test(${literal(title)}, async ({ request }) => {
   const started = Date.now();
-  const response = await request.${method}(ENDPOINT);
+  const response = await request.${method}(ENDPOINT${authOptions(call)});
   const elapsed = Date.now() - started;
 
   expect(response.status(), 'status').toBe(${call.status});
@@ -134,7 +163,7 @@ ${
     ? `  expect(response.headers()['content-type'] ?? '', 'content type').toContain(${literal(call.contentType)});\n`
     : ''
 }
-  // Observed in ${call.durationMs}ms; the budget allows for slower networks.
+  // ${budgetNote}
   expect(elapsed, 'response time (ms)').toBeLessThan(${budget});
 ${
   json && call.responseShape && method !== 'head'
@@ -147,6 +176,11 @@ ${
 }
 
 function anonymousTest(call: ApiCall, title: string): string {
+  const why =
+    call.source === 'openapi'
+      ? 'The spec marks this operation as secured'
+      : 'This endpoint was called with a session during discovery';
+
   return `
 test(${literal(title)}, async ({ playwright }) => {
   // A fresh context: no session cookies, no Authorization header.
@@ -154,8 +188,12 @@ test(${literal(title)}, async ({ playwright }) => {
 
   try {
     const response = await anonymous.${call.method.toLowerCase()}(ENDPOINT);
+    const status = response.status();
 
-    expect([401, 403], 'anonymous request must be rejected').toContain(response.status());
+    expect(
+      status === 401 || status === 403,
+      \`${why}, but an anonymous request got HTTP \${status} (expected 401 or 403)\`
+    ).toBe(true);
   } finally {
     await anonymous.dispose();
   }
@@ -163,17 +201,59 @@ test(${literal(title)}, async ({ playwright }) => {
 `;
 }
 
+function notFoundTest(call: ApiCall, title: string): string {
+  return `
+test(${literal(title)}, async ({ request }) => {
+  // An id that should not exist. The spec documents ${call.notFound!.status} for this case.
+  const response = await request.${call.method.toLowerCase()}(${literal(call.notFound!.url)}${authOptions(call)});
+
+  expect(response.status(), 'status for an unknown id').toBe(${call.notFound!.status});
+});
+`;
+}
+
+/**
+ * Reads the credential at test time. Fails loudly rather than sending
+ * an empty header, which would test anonymous access by accident.
+ */
+function credentialHelper(call: ApiCall): string {
+  if (!call.authHeader) {
+    return '';
+  }
+
+  return `
+function credential(): string {
+  const value = process.env[${literal(call.authHeader.env)}];
+
+  if (!value) {
+    throw new Error(${literal(`${call.authHeader.env} is not set (api.auth in .qyntra/config.json).`)});
+  }
+
+  return value;
+}
+`;
+}
+
 function specSource(call: ApiCall, blocks: string[], withShape: boolean): string {
-  return `/**
- * Generated by Qyntra API Test Generator. Do not edit: regenerated on
- * every \`qyntra run\`.
+  const provenance =
+    call.source === 'openapi'
+      ? ` * Documented by the OpenAPI spec${call.operation ? ` ("${call.operation.replace(/\*\//g, '')}")` : ''}:
+ *   ${call.method} ${call.url}
+ *   → ${call.status} ${call.contentType || '(no content type)'}
  *
- * Observed during discovery:
+ * The shape below asserts the properties the spec marks as required.`
+      : ` * Observed during discovery:
  *   ${call.method} ${call.url}
  *   → ${call.status} ${call.contentType || '(no content type)'} in ${call.durationMs}ms
  *
  * The shape below is key names and types only — no response values
- * were stored. A key is asserted only if every observed record had it.
+ * were stored. A key is asserted only if every observed record had it.`;
+
+  return `/**
+ * Generated by Qyntra API Test Generator. Do not edit: regenerated on
+ * every \`qyntra run\`.
+ *
+${provenance}
  */
 
 import { test, expect } from '@playwright/test';
@@ -184,7 +264,7 @@ if (process.env.QYNTRA_STORAGE_STATE) {
 }
 
 const ENDPOINT = ${literal(call.url)};
-${withShape ? `\nconst SHAPE: Shape = ${JSON.stringify(call.responseShape, null, 2)};\n` : ''}${blocks.join('')}${withShape ? SHAPE_HELPER : ''}`;
+${withShape ? `\nconst SHAPE: Shape = ${JSON.stringify(call.responseShape, null, 2)};\n` : ''}${blocks.join('')}${credentialHelper(call)}${withShape ? SHAPE_HELPER : ''}`;
 }
 
 /**

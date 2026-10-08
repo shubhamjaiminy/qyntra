@@ -31,6 +31,21 @@ export interface ApiCall {
 
   /** Shape of the JSON body; absent for non-JSON or oversized bodies. */
   responseShape?: Shape;
+
+  /** Where this came from. Absent means observed by discovery. */
+  source?: 'observed' | 'openapi';
+
+  /** OpenAPI summary or operationId, for the generated test's comment. */
+  operation?: string;
+
+  /**
+   * Header to authenticate with, value read from an env var at test
+   * time. Lets a documented secured operation get a contract test.
+   */
+  authHeader?: { name: string; env: string };
+
+  /** A documented "not found": request this URL, expect this status. */
+  notFound?: { url: string; status: number };
 }
 
 const MAX_DEPTH = 5;

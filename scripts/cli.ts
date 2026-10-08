@@ -60,6 +60,8 @@ import {
 
 import { checkOllama } from './ai/ollama-provider';
 import { createProvider, describeProvider } from './ai/create-provider';
+import { planFromOpenApi } from './lib/openapi';
+import { loadOpenApi } from './lib/openapi-loader';
 import { PING_REQUEST } from './ai/provider';
 import { log, redact, stage } from './lib/logger';
 import {
@@ -478,6 +480,45 @@ async function commandDoctor(args: ParsedArgs): Promise<number> {
       `${config.ai.apiKeyEnv} is not set — Qyntra will fall back to ` +
         'the deterministic analyzer.'
     );
+  }
+
+  // A configured spec that cannot be read is a configuration error:
+  // the run would silently test far less than the team expects.
+  if (config.api.openapi) {
+    try {
+      const spec = await loadOpenApi(config.api.openapi, config.rootDir);
+      const plan = planFromOpenApi(spec.doc, {
+        specLocation: spec.location,
+        baseUrl: config.api.baseUrl,
+        appBaseUrl: config.app.baseUrl,
+        parameters: config.api.parameters,
+        exclude: config.api.exclude,
+        auth: config.api.auth,
+      });
+
+      log.info(
+        `OpenAPI spec  : ${plan.title} ${plan.version} — ${plan.calls.length} of ` +
+          `${plan.totalOperations} operations testable (${plan.server})`
+      );
+
+      const needValues = plan.skipped.filter((entry) => entry.reason.startsWith('Needs '));
+
+      if (needValues.length > 0) {
+        log.warn(
+          `${needValues.length} GET operation(s) need parameter values to be tested; ` +
+            'see api.parameters. First: ' +
+            `${needValues[0].call} — ${needValues[0].reason}`
+        );
+      }
+
+      if (config.api.auth && !process.env[config.api.auth.env]) {
+        problems.push(
+          `${config.api.auth.env} is not set (required by api.auth for secured operations).`
+        );
+      }
+    } catch (error: any) {
+      problems.push(`api.openapi: ${error?.message ?? error}`);
+    }
   }
 
   // Whether flakiness detection is actually active. A customer whose CI
