@@ -1225,6 +1225,10 @@ async function commandRun(args: ParsedArgs): Promise<number> {
   runStage('TEST GENERATION', 'test-generator', [], config);
   runStage('API TEST GENERATION', 'api-test-generator', [], config);
 
+  if (config.llm.features.length > 0) {
+    runStage('LLM TEST GENERATION', 'llm-test-generator', [], config);
+  }
+
   // Before the test run, so test traffic never skews the measurement.
   if (config.performance.enabled) {
     runStage('PERFORMANCE', 'performance', [], config);

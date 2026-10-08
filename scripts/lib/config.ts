@@ -14,6 +14,12 @@ import fs from 'fs';
 import path from 'path';
 
 import { ConfigError } from './exit-codes';
+import {
+  ALL_PROBES,
+  type JudgeConfig,
+  type LlmFeature,
+  type ProbeName,
+} from './llm-tests';
 
 // --------------------------------------------------
 // SHAPE
@@ -216,6 +222,14 @@ export interface PerformanceConfig {
   maxEndpoints: number;
 }
 
+/** Testing the AI features inside the application. */
+export interface LlmConfig {
+  features: LlmFeature[];
+
+  /** Model that grades rubric checks. Default: derived from `ai`. */
+  judge?: JudgeConfig;
+}
+
 /** Which code change a run is judged as. */
 export interface ChangeConfig {
   enabled: boolean;
@@ -239,6 +253,7 @@ export interface QyntraConfig {
   api: ApiConfig;
   performance: PerformanceConfig;
   change: ChangeConfig;
+  llm: LlmConfig;
 
   /** Absolute path of the loaded config file, if any. */
   readonly configPath?: string;
@@ -316,6 +331,10 @@ function defaults(rootDir: string): QyntraConfig {
 
     change: {
       enabled: true,
+    },
+
+    llm: {
+      features: [],
     },
 
     rootDir,
@@ -806,6 +825,8 @@ export function loadConfig(
 
     performance: resolvePerformanceConfig(merged.performance),
 
+    llm: resolveLlmConfig(merged.llm, resolvedAI),
+
     change: (() => {
       const change = isPlainObject(merged.change) ? merged.change : {};
 
@@ -893,6 +914,170 @@ export function stageApiConfig(rootDir: string = process.cwd()): ApiConfig {
   }
 
   return resolveApiConfig(raw);
+}
+
+/**
+ * Validate llm.features. Strict, because a malformed feature would
+ * generate tests that silently test nothing: a body without "{{input}}"
+ * sends the same request for every probe.
+ */
+export function resolveLlmConfig(raw: unknown, ai: AIConfig): LlmConfig {
+  const llm = isPlainObject(raw) ? raw : {};
+  const rawFeatures = llm.features ?? [];
+
+  if (!Array.isArray(rawFeatures)) {
+    throw new ConfigError('Config field "llm.features" must be an array.');
+  }
+
+  const features: LlmFeature[] = rawFeatures.map((entry, index) => {
+    const at = `llm.features[${index}]`;
+    const feature = isPlainObject(entry) ? entry : {};
+
+    const name = assertNonEmptyString(feature.name, `${at}.name`, 'A label, e.g. "Support bot".');
+    const endpoint = validateUrl(
+      assertNonEmptyString(feature.endpoint, `${at}.endpoint`, 'The URL the AI feature is served at.'),
+      `${at}.endpoint`
+    );
+
+    if (!JSON.stringify(feature.body ?? '').includes('{{input}}')) {
+      throw new ConfigError(
+        `${at}.body must contain "{{input}}" where the test input goes.`,
+        'Example: "body": { "message": "{{input}}" }'
+      );
+    }
+
+    const method = String(feature.method ?? 'POST').toUpperCase();
+
+    if (method !== 'POST' && method !== 'PUT') {
+      throw new ConfigError(`${at}.method must be POST or PUT.`);
+    }
+
+    const probes =
+      feature.probes === false
+        ? []
+        : Array.isArray(feature.probes)
+          ? feature.probes.map((probe) => {
+              if (!(ALL_PROBES as string[]).includes(String(probe))) {
+                throw new ConfigError(
+                  `${at}.probes: unknown probe "${probe}".`,
+                  `Available: ${ALL_PROBES.join(', ')}.`
+                );
+              }
+              return probe as ProbeName;
+            })
+          : [...ALL_PROBES];
+
+    const cases = (Array.isArray(feature.cases) ? feature.cases : []).map((rawCase, caseIndex) => {
+      const testCase = isPlainObject(rawCase) ? rawCase : {};
+      const expectation = isPlainObject(testCase.expect) ? testCase.expect : {};
+      const caseAt = `${at}.cases[${caseIndex}]`;
+
+      const strings = (value: unknown) =>
+        Array.isArray(value) ? value.map((item) => String(item)) : value === undefined ? undefined : [String(value)];
+
+      const expect = {
+        ...(expectation.contains !== undefined ? { contains: strings(expectation.contains) } : {}),
+        ...(expectation.notContains !== undefined ? { notContains: strings(expectation.notContains) } : {}),
+        ...(expectation.matches !== undefined ? { matches: String(expectation.matches) } : {}),
+        ...(expectation.rubric !== undefined ? { rubric: String(expectation.rubric) } : {}),
+      };
+
+      if (Object.keys(expect).length === 0) {
+        throw new ConfigError(
+          `${caseAt}.expect is empty: a case must check something.`,
+          'Use contains, notContains, matches or rubric.'
+        );
+      }
+
+      if (expect.matches) {
+        try {
+          new RegExp(expect.matches);
+        } catch {
+          throw new ConfigError(`${caseAt}.expect.matches is not a valid regular expression.`);
+        }
+      }
+
+      return {
+        name: assertNonEmptyString(testCase.name, `${caseAt}.name`),
+        input: String(testCase.input ?? ''),
+        expect,
+      };
+    });
+
+    let auth: LlmFeature['auth'];
+
+    if (feature.auth !== undefined) {
+      const block = isPlainObject(feature.auth) ? feature.auth : {};
+      auth = {
+        header: assertNonEmptyString(block.header, `${at}.auth.header`),
+        env: assertNonEmptyString(block.env, `${at}.auth.env`),
+      };
+    }
+
+    return {
+      name,
+      endpoint,
+      method: method as 'POST' | 'PUT',
+      headers: isPlainObject(feature.headers)
+        ? Object.fromEntries(Object.entries(feature.headers).map(([key, value]) => [key, String(value)]))
+        : {},
+      ...(auth ? { auth } : {}),
+      body: feature.body,
+      ...(feature.responsePath !== undefined ? { responsePath: String(feature.responsePath) } : {}),
+      canaries: Array.isArray(feature.canaries) ? feature.canaries.map((item) => String(item)) : [],
+      maxLatencyMs: validateNumber(feature.maxLatencyMs ?? 30_000, `${at}.maxLatencyMs`, 100, 600_000),
+      probes,
+      cases,
+    };
+  });
+
+  // The judge defaults to the configured AI, where the emitted helper
+  // can call it. OpenAI is not supported as a judge yet.
+  const rawJudge = isPlainObject(llm.judge) ? llm.judge : undefined;
+  let judge: JudgeConfig | undefined;
+
+  if (rawJudge) {
+    const provider = String(rawJudge.provider ?? '');
+
+    if (provider !== 'ollama' && provider !== 'gemini') {
+      throw new ConfigError('llm.judge.provider must be "ollama" or "gemini".');
+    }
+
+    const defaults = AI_PROVIDER_DEFAULTS[provider];
+
+    judge = {
+      provider,
+      model: String(rawJudge.model ?? defaults.model),
+      ...(provider === 'ollama'
+        ? { baseUrl: String(rawJudge.baseUrl ?? defaults.baseUrl) }
+        : { apiKeyEnv: String(rawJudge.apiKeyEnv ?? defaults.apiKeyEnv) }),
+    };
+  } else if (ai.provider === 'ollama' || ai.provider === 'gemini') {
+    judge = {
+      provider: ai.provider,
+      model: ai.model,
+      ...(ai.provider === 'ollama' ? { baseUrl: ai.baseUrl } : { apiKeyEnv: ai.apiKeyEnv }),
+    };
+  }
+
+  return { features, ...(judge ? { judge } : {}) };
+}
+
+/** Lenient stage-level read, like stageAIConfig(). */
+export function stageLlmConfig(rootDir: string = process.cwd()): LlmConfig {
+  const configPath = findConfigFile(rootDir);
+
+  let raw: any = {};
+
+  if (configPath !== undefined) {
+    try {
+      raw = JSON.parse(fs.readFileSync(configPath, 'utf-8')) ?? {};
+    } catch {
+      // `qyntra doctor` reports the malformed file precisely.
+    }
+  }
+
+  return resolveLlmConfig(raw.llm, resolveAIConfig(withAIEnvOverrides(raw.ai)));
 }
 
 export function resolvePerformanceConfig(raw: unknown): PerformanceConfig {
