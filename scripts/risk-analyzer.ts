@@ -19,6 +19,7 @@ import {
   formatRisk,
   type DiscoveredSurface,
 } from './lib/risk-intelligence';
+import { outcomeRiskFactors, readOutcomes } from './lib/release-outcomes';
 
 const requirement = process.argv.slice(2).join(' ').trim();
 
@@ -39,7 +40,16 @@ const applicationMap = readOptionalArtifact<DiscoveredSurface>(
   paths.applicationMap
 );
 
-const assessment = assessRisk(requirement, applicationMap);
+// Recorded production outcomes: an incident in this area raises risk.
+const historyFactors = outcomeRiskFactors(
+  readOutcomes(paths.releaseOutcomes).outcomes,
+  requirement,
+  (applicationMap?.capabilities ?? []).map((capability) =>
+    String(capability.name ?? '')
+  )
+);
+
+const assessment = assessRisk(requirement, applicationMap, historyFactors);
 
 writeArtifact(paths.riskAnalysis, {
   generatedAt: new Date().toISOString(),

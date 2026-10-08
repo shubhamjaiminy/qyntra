@@ -101,7 +101,9 @@ export type RiskFactorSource =
   /** Observed in the running application by discovery. */
   | 'discovered'
   /** Inferred from the requirement text, not observed. */
-  | 'requirement';
+  | 'requirement'
+  /** A recorded release outcome: production said so. */
+  | 'history';
 
 export interface RiskFactor {
   points: number;
@@ -541,8 +543,20 @@ function buildReasoning(
   derivedFrom: RiskAssessment['derivedFrom'],
   factors: RiskFactor[]
 ): string {
+  // Production outcomes are reported apart from what discovery saw, so
+  // the reasoning never credits discovery with an incident it did not
+  // observe.
+  const history = factors.filter((factor) => factor.source === 'history');
+
+  const historyClause =
+    history.length === 0
+      ? ''
+      : ` Recorded release outcomes add: ${history
+          .map((factor) => factor.reason.toLowerCase())
+          .join('; ')}.`;
+
   const top = factors
-    .slice()
+    .filter((factor) => factor.source !== 'history')
     .sort((a, b) => b.points - a.points)
     .slice(0, 3)
     .map((factor) => factor.reason.toLowerCase());
@@ -552,19 +566,22 @@ function buildReasoning(
       `Rated ${level} from requirement wording only. Discovery observed ` +
       'no usable application surface, so this rating is not backed by ' +
       'evidence from the running app. If the relevant flow sits behind ' +
-      'authentication, configure app.auth so Qyntra can reach it.'
+      'authentication, configure app.auth so Qyntra can reach it.' +
+      historyClause
     );
   }
 
   if (top.length === 0) {
     return (
       `Rated ${level}. Discovery found no payment, credential, ` +
-      'destructive or integration surface on the pages it reached.'
+      'destructive or integration surface on the pages it reached.' +
+      historyClause
     );
   }
 
   return (
-    `Rated ${level} because discovery observed: ${top.join('; ')}.`
+    `Rated ${level} because discovery observed: ${top.join('; ')}.` +
+    historyClause
   );
 }
 
@@ -772,17 +789,24 @@ function deriveScenarios(
 
 export function assessRisk(
   requirement: string,
-  surface: DiscoveredSurface | undefined
+  surface: DiscoveredSurface | undefined,
+  /** Factors from recorded release outcomes (lib/release-outcomes). */
+  historyFactors: RiskFactor[] = []
 ): RiskAssessment {
   const profile = profileSurface(surface);
   const evidenceBacked = hasUsableEvidence(surface, profile);
 
-  const factors: RiskFactor[] = evidenceBacked
-    ? [
-        ...discoveredFactors(profile, surface as DiscoveredSurface),
-        ...requirementFactors(requirement),
-      ]
-    : requirementFactors(requirement);
+  const factors: RiskFactor[] = [
+    ...(evidenceBacked
+      ? [
+          ...discoveredFactors(profile, surface as DiscoveredSurface),
+          ...requirementFactors(requirement),
+        ]
+      : requirementFactors(requirement)),
+    // Production outcomes are evidence too, and they count even when
+    // discovery failed: a past incident is not made up by a missing map.
+    ...historyFactors,
+  ];
 
   const rawScore = factors.reduce(
     (sum, factor) => sum + factor.points,

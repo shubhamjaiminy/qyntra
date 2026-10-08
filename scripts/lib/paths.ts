@@ -36,6 +36,12 @@ export interface ArtifactPaths {
   /** Verified .patch files, plus backups while a patch is on disk. */
   remediationDir: string;
 
+  /**
+   * Recorded release outcomes. In .qyntra/, not the output directory:
+   * outcomes are facts the team commits, not a regenerated artifact.
+   */
+  releaseOutcomes: string;
+
   /** Playwright's JSON reporter output. */
   playwrightResults: string;
 
@@ -78,6 +84,7 @@ export function artifactPaths(
     dashboard: path.join(outputDir, 'index.html'),
     remediation: path.join(outputDir, 'remediation.json'),
     remediationDir: path.join(outputDir, 'remediation'),
+    releaseOutcomes: path.join(config.rootDir, '.qyntra', 'release-outcomes.json'),
 
     playwrightResults: resolveFromRoot(
       config.rootDir,

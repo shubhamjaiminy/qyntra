@@ -298,6 +298,67 @@ are capped by `"remediation": { "maxRepairs": 5 }`; set
 
 ---
 
+## Learning from releases
+
+A gate that never finds out whether its SAFE was right cannot be
+trusted, and cannot get better. After a release, record what happened:
+
+```bash
+npx qyntra outcome --commit 4e489eb --result incident --severity High \
+  --area checkout --note "Double charge on retry"
+npx qyntra outcome --commit 427a4b7 --result ok
+npx qyntra outcome --list      # outcomes and the gate's track record
+```
+
+`--result` is `ok`, `incident`, `rollback` or `hotfix`. `--date` sets
+when it happened (default: now). A later outcome for the same commit
+replaces the earlier one, so "ok" on deploy day and an incident found a
+week later do not both count.
+
+Outcomes are stored in `.qyntra/release-outcomes.json`. **Commit it.**
+It is a small, human-written record that your team and CI should share,
+and unlike the run history it is not something a cache eviction should
+be able to erase.
+
+Outcomes feed back in two places:
+
+- **Risk.** An incident raises the risk of later runs whose requirement
+  or discovered capabilities share a word with its `--area`. A High or
+  Critical incident adds 2 points for 30 days and 1 point up to 90; a
+  lesser one adds 1 point for 30 days. History adds at most 3 points in
+  total, and is reported as its own `[history]` factor — never credited
+  to discovery:
+
+  ```
+  +2  [history] A High incident in "checkout" followed a release 7 day(s) ago
+         └─ commit 4e489ebbed33: Double charge on retry
+  ```
+
+  An incident with no `--area` counts against the whole application at
+  1 point. An incident in an unrelated area counts for nothing.
+
+- **The gate's confidence in itself.** Outcomes are joined with the
+  gate's own past verdicts (by commit, from run history), so the gate
+  knows how often its SAFE was wrong:
+
+  ```
+  Warnings:
+    - In the last 90 days 3 of 4 release(s) this gate called safe later caused an incident, rollback or hotfix:
+    - 1ce242f was called SAFE (score 100) and then caused a High incident in todo list.
+    - Confidence lowered: 75% of recent SAFE calls were wrong. Add tests for the areas listed above, or raise gate.minQualityScore.
+  ```
+
+  With at least 3 judged releases and more than 20% of SAFE calls
+  wrong, decision confidence drops a level. The verdict and score do
+  not change — the track record is evidence about the gate, not about
+  this release.
+
+In CI the gate reads the cached run history, so it measures the CI gate
+that actually let those commits ship. An outcome on a commit the gate
+never judged still counts towards risk, and is reported separately.
+
+---
+
 ## How risk is rated
 
 Risk multiplies the cost of a failure, so it is derived from what
@@ -502,6 +563,7 @@ A broken pipeline never looks like a clean "unsafe" verdict.
 | `qyntra run` | Full pipeline, ending in a release decision |
 | `qyntra gate` | Release decision from existing artifacts |
 | `qyntra repair [--apply]` | Propose and verify fixes for broken tests; `--apply` writes them |
+| `qyntra outcome ...` | Record what happened after a release; `--list` shows the track record |
 
 `gate` is separate from `run` so you can compute the verdict in a later
 CI job — commonly a required status check after the test job.

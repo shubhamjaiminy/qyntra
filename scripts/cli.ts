@@ -21,7 +21,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { spawnSync } from 'child_process';
+import { execFileSync, spawnSync } from 'child_process';
 
 import dotenv from 'dotenv';
 
@@ -62,6 +62,18 @@ import { checkOllama } from './ai/ollama-provider';
 import { createProvider, describeProvider } from './ai/create-provider';
 import { PING_REQUEST } from './ai/provider';
 import { log, redact, stage } from './lib/logger';
+import {
+  OUTCOME_RESULTS,
+  OUTCOME_SEVERITIES,
+  OUTCOME_WINDOW_DAYS,
+  applyTrackRecord,
+  readOutcomes,
+  recordOutcome,
+  sameCommit,
+  trackRecord,
+  type OutcomeResult,
+  type OutcomeSeverity,
+} from './lib/release-outcomes';
 
 import {
   authenticate,
@@ -691,7 +703,7 @@ function buildDecision(
     ),
   };
 
-  const decision = decideRelease({
+  const baseDecision = decideRelease({
     execution,
     failures,
     risk,
@@ -714,6 +726,18 @@ function buildDecision(
 
   // Verified repairs never change the score — the patch is not applied
   // yet, so the test is still red — but they change what to do next.
+  // How often this gate's SAFE has been wrong, from outcomes the team
+  // recorded, joined with the gate's own past verdicts. Adds warnings
+  // and can lower confidence; never changes the verdict or score.
+  //
+  // All of history, not priorRuns: the baseline exclusion exists for
+  // flakiness, and here it would make the gate and `outcome --list`
+  // report different numbers for the same record.
+  const decision = applyTrackRecord(
+    baseDecision,
+    trackRecord(readOutcomes(paths.releaseOutcomes).outcomes, history.runs)
+  );
+
   const remediationArtifact = readOptionalArtifact<{
     resultsGeneratedAt?: string;
     repairs?: { status?: string; reviewRequired?: boolean; applied?: boolean }[];
@@ -845,6 +869,138 @@ function commandGate(args: ParsedArgs): number {
   return decision.verdict === 'UNSAFE'
     ? EXIT_QUALITY_GATE_FAILED
     : EXIT_OK;
+}
+
+// --------------------------------------------------
+// COMMAND: outcome
+// --------------------------------------------------
+
+/** Full SHA for a commit-ish, or the input when git cannot resolve it. */
+function resolveCommit(rootDir: string, commitish: string): string {
+  try {
+    return execFileSync(
+      'git',
+      ['rev-parse', '--verify', '--quiet', `${commitish}^{commit}`],
+      { cwd: rootDir, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }
+    ).trim();
+  } catch {
+    if (/^[0-9a-f]{7,40}$/i.test(commitish)) {
+      // Not in this clone (a shallow CI checkout, say); still a SHA.
+      return commitish.toLowerCase();
+    }
+
+    throw new ConfigError(
+      `Not a commit: ${commitish}`,
+      'Pass the released commit SHA, e.g. --commit 4e489eb.'
+    );
+  }
+}
+
+function stringFlag(args: ParsedArgs, name: string): string | undefined {
+  const value = args.flags[name];
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined;
+}
+
+/**
+ * Record what happened after a release, or list the record.
+ *
+ *   qyntra outcome --commit <sha> --result ok|incident|rollback|hotfix
+ *                  [--severity Critical|High|Medium|Low] [--area checkout]
+ *                  [--note "..."] [--date 2026-10-01]
+ *   qyntra outcome --list
+ */
+function commandOutcome(args: ParsedArgs): number {
+  const config = configFrom(args);
+  const paths = artifactPaths(config);
+
+  stage('RELEASE OUTCOMES');
+
+  if (args.flags.list === true) {
+    const outcomes = readOutcomes(paths.releaseOutcomes).outcomes;
+    const runs = readHistory(paths.runHistory).runs;
+    const record = trackRecord(outcomes, runs);
+
+    log.info(`Outcomes recorded : ${outcomes.length} (${paths.releaseOutcomes})`);
+    log.info(
+      `Last ${OUTCOME_WINDOW_DAYS} days     : ${record.judged} judged by this gate, ` +
+        `${record.calledSafe} called safe, ${record.escapes} of those caused an incident` +
+        (record.escapeRate === null ? '' : ` (${Math.round(record.escapeRate * 100)}%)`)
+    );
+
+    if (record.falseAlarms > 0) {
+      log.info(`False alarms      : ${record.falseAlarms} called UNSAFE, shipped, and were fine`);
+    }
+
+    for (const detail of record.escapeDetails) {
+      log.info(`  - ${detail}`);
+    }
+
+    log.blank();
+
+    for (const outcome of outcomes.slice(-20)) {
+      log.info(
+        `${outcome.occurredAt.slice(0, 10)}  ${outcome.commit.slice(0, 7)}  ` +
+          `${outcome.result.padEnd(8)} ${outcome.severity ?? ''}` +
+          `${outcome.area ? `  [${outcome.area}]` : ''}` +
+          `${outcome.note ? `  ${outcome.note}` : ''}`
+      );
+    }
+
+    return EXIT_OK;
+  }
+
+  const result = stringFlag(args, 'result');
+
+  if (!result || !(OUTCOME_RESULTS as readonly string[]).includes(result)) {
+    throw new ConfigError(
+      `--result must be one of: ${OUTCOME_RESULTS.join(', ')}`,
+      'Example: qyntra outcome --commit 4e489eb --result incident --severity High --area checkout'
+    );
+  }
+
+  const severity = stringFlag(args, 'severity');
+
+  if (severity && !(OUTCOME_SEVERITIES as readonly string[]).includes(severity)) {
+    throw new ConfigError(`--severity must be one of: ${OUTCOME_SEVERITIES.join(', ')}`);
+  }
+
+  const date = stringFlag(args, 'date');
+  const occurredAt = date ? new Date(date) : new Date();
+
+  if (Number.isNaN(occurredAt.getTime()) || occurredAt.getTime() > Date.now() + 60_000) {
+    throw new ConfigError(`--date is not a valid past date: ${date}`);
+  }
+
+  const commit = resolveCommit(config.rootDir, stringFlag(args, 'commit') ?? 'HEAD');
+
+  recordOutcome(paths.releaseOutcomes, {
+    commit,
+    result: result as OutcomeResult,
+    ...(severity && result !== 'ok' ? { severity: severity as OutcomeSeverity } : {}),
+    ...(stringFlag(args, 'area') ? { area: stringFlag(args, 'area') } : {}),
+    ...(stringFlag(args, 'note') ? { note: stringFlag(args, 'note') } : {}),
+    occurredAt: occurredAt.toISOString(),
+    recordedAt: new Date().toISOString(),
+  });
+
+  const judged = [...readHistory(paths.runHistory).runs]
+    .reverse()
+    .find((run) => run.git?.commit && sameCommit(run.git.commit, commit));
+
+  log.info(`Recorded : ${result}${severity && result !== 'ok' ? ` (${severity})` : ''} for ${commit.slice(0, 12)}`);
+  log.info(
+    judged
+      ? `Gate said: ${judged.verdict} (score ${judged.qualityScore}) on ${judged.timestamp.slice(0, 10)}`
+      : 'Gate said: no verdict for this commit in local run history. CI\'s ' +
+          'history will be joined when CI next runs.'
+  );
+  log.blank();
+  log.info(
+    `Commit ${path.relative(config.rootDir, paths.releaseOutcomes)} so your ` +
+      'team and CI see this outcome.'
+  );
+
+  return EXIT_OK;
 }
 
 // --------------------------------------------------
@@ -1030,6 +1186,10 @@ Usage:
   qyntra run [requirement]    Full pipeline, ending in a release decision
   qyntra gate                 Release decision from existing artifacts
   qyntra repair [--apply]     Propose and verify fixes for broken tests
+  qyntra outcome ...          Record what happened after a release
+                              --commit <sha> --result ok|incident|rollback|hotfix
+                              [--severity High] [--area checkout] [--note "..."]
+  qyntra outcome --list       Show recorded outcomes and the gate's track record
   qyntra help                 Show this message
 
 Options:
@@ -1102,6 +1262,9 @@ async function main(): Promise<number> {
 
     case 'repair':
       return commandRepair(args);
+
+    case 'outcome':
+      return commandOutcome(args);
 
     case 'help':
     case '--help':
