@@ -239,6 +239,48 @@ model's capabilities rather than guessing from its name.
 
 ---
 
+## API tests
+
+While discovery drives the browser, Qyntra watches the XHR/fetch calls
+the application makes and generates a Playwright API test for each JSON
+endpoint it saw, written next to the UI tests and gated the same way:
+
+```
+✓ api-01-get-api-articles.spec.ts
+   └─ GET /api/articles responds with the observed contract
+```
+
+Each contract test checks the status, the content type, the **shape** of
+the response, and a response-time budget (5× what was observed, never
+under 3 seconds — a slow CI network is not a regression). The shape is
+key names and types only; no response values are stored in the
+application map or the generated test. A key is asserted only if every
+observed record had it, and a field seen as `null` in one record and a
+string in another is treated as a nullable string, so optional fields do
+not cause false failures.
+
+When a call carried the logged-in session, Qyntra also generates a test
+that the endpoint **refuses anonymous access** (401 or 403) — the
+security regression a UI test never notices.
+
+What Qyntra deliberately does not do:
+
+- **Replay writes.** POST, PUT, PATCH and DELETE calls are listed as
+  untested in `qyntra-out/api-generation.json`. Replaying them against
+  your environment would create, change or delete real data.
+- **Store tokens.** Query parameters that look like credentials or
+  personal data (`token`, `key`, `session`, `email`, …) are dropped from
+  replayable URLs. Calls authenticated with a header token cannot be
+  replayed from the saved session, so only their anonymous refusal is
+  tested.
+- **Test analytics.** Monitoring, analytics and tracking traffic
+  (Google Analytics, Sentry, Segment, Cloudflare beacons, …) is ignored.
+
+IDs in paths are generalised (`/api/articles/{id}`), so one endpoint
+observed with many records yields one test.
+
+---
+
 ## Repairing broken tests
 
 When a failure is diagnosed as a **test defect**, Qyntra tries to fix the
@@ -608,8 +650,11 @@ your own CI cache. Qyntra has nowhere to send it.
 
 Stated plainly, because you will find them anyway:
 
-- **UI tests only.** Discovery records API endpoints, but generated tests
-  drive the browser. API, performance and LLM-feature testing are not
+- **API tests cover reads the app was seen making.** Contract tests are
+  generated from GET traffic observed during discovery, so endpoints the
+  reached pages never call are not tested, and mutating calls are never
+  replayed. There is no OpenAPI input yet. Performance testing is a
+  response-time budget, not load testing; LLM-feature testing is not
   implemented.
 - **The codebase is not an input.** Discovery is black-box. Risk is
   derived from the application surface, not from your diff.

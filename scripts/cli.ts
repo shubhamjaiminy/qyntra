@@ -1075,6 +1075,7 @@ async function commandRun(args: ParsedArgs): Promise<number> {
 
   runStage('TEST INTELLIGENCE', 'scenario-mapper', [], config);
   runStage('TEST GENERATION', 'test-generator', [], config);
+  runStage('API TEST GENERATION', 'api-test-generator', [], config);
 
   stage('TEST EXECUTION');
 

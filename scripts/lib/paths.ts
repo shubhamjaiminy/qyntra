@@ -23,6 +23,7 @@ export interface ArtifactPaths {
   applicationMap: string;
   scenarioMapping: string;
   generationSummary: string;
+  apiGeneration: string;
   failures: string;
   failureAnalysis: string;
   aiAnalysis: string;
@@ -76,6 +77,7 @@ export function artifactPaths(
     applicationMap: path.join(outputDir, 'application-map.json'),
     scenarioMapping: path.join(outputDir, 'scenario-mapping.json'),
     generationSummary: path.join(outputDir, 'generation-summary.json'),
+    apiGeneration: path.join(outputDir, 'api-generation.json'),
     failures: path.join(outputDir, 'failures.json'),
     failureAnalysis: path.join(outputDir, 'failure-analysis.json'),
     aiAnalysis: path.join(outputDir, 'ai-analysis.json'),

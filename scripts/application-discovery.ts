@@ -2,6 +2,14 @@
 import { chromium, type Browser, type Page } from '@playwright/test';
 import fs from 'fs';
 
+import {
+  dedupeCalls,
+  isNoise,
+  pathTemplate,
+  replayableUrl,
+  shapeOf,
+  type ApiCall,
+} from './lib/api-observation';
 import { stagePaths } from './lib/paths';
 import { BROWSER_PROFILE } from './lib/auth';
 import {
@@ -63,6 +71,9 @@ interface ApplicationMap {
   network: {
     requests: string[];
     apiEndpoints: string[];
+
+    /** Observed API calls with status, timing and response shape. */
+    apiCalls: ApiCall[];
   };
 
   metadata: {
@@ -104,6 +115,14 @@ let page: Page | null = null;
 
 const networkRequests = new Set<string>();
 const apiEndpoints = new Set<string>();
+
+// Response bodies are read asynchronously; awaited before the map is
+// written so no observation is lost to a race.
+const apiCalls: ApiCall[] = [];
+const pendingApiCalls: Promise<void>[] = [];
+
+/** Bodies larger than this are not parsed for a shape. */
+const MAX_API_BODY_BYTES = 2 * 1024 * 1024;
 
 const paths = stagePaths();
 
@@ -1697,6 +1716,77 @@ async function main(): Promise<void> {
     }
   );
 
+  page.on(
+    'response',
+    (response) => {
+      const request = response.request();
+      const resourceType = request.resourceType();
+
+      if (
+        (resourceType !== 'xhr' && resourceType !== 'fetch') ||
+        request.method() === 'OPTIONS' ||
+        isNoise(response.url())
+      ) {
+        return;
+      }
+
+      pendingApiCalls.push(
+        (async () => {
+          try {
+            const headers = await request.allHeaders();
+            const contentType = String(
+              response.headers()['content-type'] ?? ''
+            ).split(';')[0].trim();
+
+            // Cookies count as authentication only when Qyntra logged
+            // in; otherwise they are usually analytics or consent.
+            const auth: ApiCall['auth'] = headers['authorization']
+              ? 'header'
+              : headers['cookie'] && process.env.QYNTRA_STORAGE_STATE
+                ? 'cookie'
+                : 'none';
+
+            const timing = request.timing();
+            const durationMs =
+              timing.responseEnd > 0 && timing.requestStart >= 0
+                ? Math.round(timing.responseEnd - timing.requestStart)
+                : 0;
+
+            let responseShape: ApiCall['responseShape'];
+
+            const length = Number(response.headers()['content-length'] ?? 0);
+
+            if (
+              /json/.test(contentType) &&
+              length <= MAX_API_BODY_BYTES
+            ) {
+              try {
+                responseShape = shapeOf(await response.json());
+              } catch {
+                // Body unavailable (redirect, aborted) or not JSON.
+              }
+            }
+
+            const parsed = new URL(response.url());
+
+            apiCalls.push({
+              method: request.method(),
+              url: replayableUrl(response.url()),
+              template: pathTemplate(parsed.pathname),
+              status: response.status(),
+              contentType,
+              durationMs,
+              auth,
+              ...(responseShape ? { responseShape } : {}),
+            });
+          } catch {
+            // An observation that fails is skipped, never fatal.
+          }
+        })()
+      );
+    }
+  );
+
   // ----------------------------------------------
   // OPEN APPLICATION
   // ----------------------------------------------
@@ -1906,6 +1996,17 @@ async function main(): Promise<void> {
   // NETWORK ANALYSIS
   // ----------------------------------------------
 
+  // Every observed response must finish parsing before the map exists.
+  await Promise.allSettled(pendingApiCalls);
+
+  // Observed JSON APIs count as endpoints even without /api/ in the
+  // path; risk rates the integration surface from this list.
+  for (const call of apiCalls) {
+    if (/json/.test(call.contentType)) {
+      apiEndpoints.add(`${new URL(call.url).origin}${call.template}`);
+    }
+  }
+
   const networkList =
     [
       ...networkRequests,
@@ -2007,6 +2108,8 @@ async function main(): Promise<void> {
       network: {
         requests:
           networkList,
+        apiCalls:
+          dedupeCalls(apiCalls),
         apiEndpoints:
           [
             ...apiEndpoints,
