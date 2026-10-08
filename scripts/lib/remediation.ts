@@ -149,6 +149,13 @@ export function applyEdits(
 const VALUE_MATCHER =
   /\.to(HaveText|ContainText|HaveValue|HaveValues|HaveCount|HaveAttribute|HaveClass|HaveCSS|HaveURL|HaveTitle|HaveId|HaveJSProperty|HaveAccessibleName|HaveAccessibleDescription|HaveScreenshot|MatchAriaSnapshot|Be|Equal|StrictEqual|Contain|ContainEqual|Match|MatchObject|HaveLength|HaveProperty|BeChecked|BeGreaterThan|BeGreaterThanOrEqual|BeLessThan|BeLessThanOrEqual|BeCloseTo)\s*\(/g;
 
+/**
+ * Lines that set up the scenario rather than observe it: network
+ * stubbing, script injection and direct DOM or storage manipulation.
+ */
+const SCENARIO =
+  /\b(route|unroute|routeFromHAR|routeWebSocket)\s*\(|\.(fulfill|abort|continue|fallback)\s*\(|\b(evaluate|evaluateHandle|addInitScript|exposeFunction|exposeBinding|setContent|setExtraHTTPHeaders|addCookies|clearCookies|setOffline|setGeolocation|grantPermissions)\s*\(|\b(document|window|localStorage|sessionStorage)\s*\.|\b(innerHTML|outerHTML|insertAdjacentHTML)\b|\bfetch\s*\(|\brequest\s*\.\s*(get|post|put|patch|delete|fetch)\s*\(/;
+
 interface Guardrail {
   /** Why a patch introducing this is refused. */
   reason: string;
@@ -252,6 +259,22 @@ export function checkGuardrails(
     }
   }
 
+  // The scenario is off-limits. A mocked 500 is usually the point of
+  // the test ("shows an error banner when the API fails"); changing it
+  // to 200 produces a passing test about something else.
+  const { removed, added } = changedLines(original, patched);
+
+  const touchesScenario = [...removed, ...added].find((line) =>
+    SCENARIO.test(line)
+  );
+
+  if (touchesScenario !== undefined) {
+    problems.push(
+      'Changes what the test simulates (network mocks, injected scripts or ' +
+        `page content), not how it checks the application: "${touchesScenario.slice(0, 80)}".`
+    );
+  }
+
   for (const guardrail of FORBIDDEN) {
     const before = countMatches(originalCode, guardrail.pattern);
     const after = countMatches(patchedCode, guardrail.pattern);
@@ -276,22 +299,19 @@ export function changesExpectation(
 ): boolean {
   // Compare matcher calls only — `.toHaveText('1 item left')` — so a
   // new locator on the same line is not mistaken for a new expectation.
-  const matchers = (source: string) =>
-    new Set(
-      [...stripComments(source).matchAll(/\.(?:not\s*\.\s*)?to[A-Z]\w*\s*\([^\n]*/g)].map(
+  // And only on the lines the patch changed: an identical matcher
+  // elsewhere in the file says nothing about this one.
+  const matchers = (lines: string[]) =>
+    lines.flatMap((line) =>
+      [...line.matchAll(/\.(?:not\s*\.\s*)?to[A-Z]\w*\s*\([^\n]*/g)].map(
         (match) => match[0].replace(/\s+/g, ' ').trim()
       )
     );
 
-  const before = matchers(original);
+  const { removed, added } = changedLines(original, patched);
+  const before = new Set(matchers(removed));
 
-  for (const matcher of matchers(patched)) {
-    if (!before.has(matcher)) {
-      return true;
-    }
-  }
-
-  return false;
+  return matchers(added).some((matcher) => !before.has(matcher));
 }
 
 /**
@@ -299,11 +319,10 @@ export function changesExpectation(
  * context. Small and dependency-free: spec files are short, so an
  * O(n·m) LCS is fine.
  */
-export function unifiedDiff(
-  original: string,
-  patched: string,
-  filePath: string
-): string {
+type DiffOp = { kind: ' ' | '-' | '+'; line: string; aLine: number; bLine: number };
+
+/** Line diff via LCS. Removals before additions, as git orders them. */
+function diffLines(original: string, patched: string): DiffOp[] {
   const a = original.split('\n');
   const b = patched.split('\n');
 
@@ -321,9 +340,7 @@ export function unifiedDiff(
     }
   }
 
-  type Op = { kind: ' ' | '-' | '+'; line: string; aLine: number; bLine: number };
-
-  const ops: Op[] = [];
+  const ops: DiffOp[] = [];
   let i = 0;
   let j = 0;
 
@@ -341,6 +358,26 @@ export function unifiedDiff(
       j++;
     }
   }
+
+  return ops;
+}
+
+/** The lines a patch removes and adds, trimmed. */
+function changedLines(original: string, patched: string) {
+  const ops = diffLines(stripComments(original), stripComments(patched));
+
+  return {
+    removed: ops.filter((op) => op.kind === '-').map((op) => op.line.trim()),
+    added: ops.filter((op) => op.kind === '+').map((op) => op.line.trim()),
+  };
+}
+
+export function unifiedDiff(
+  original: string,
+  patched: string,
+  filePath: string
+): string {
+  const ops = diffLines(original, patched);
 
   const CONTEXT = 3;
   const lines = [`--- a/${filePath}`, `+++ b/${filePath}`];

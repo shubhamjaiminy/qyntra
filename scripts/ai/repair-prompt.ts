@@ -52,6 +52,11 @@ Never:
   .only
 - add waitForTimeout or { force: true }
 - change the application URL under test
+- change what the test simulates: network
+  mocks (page.route, route.fulfill), injected
+  scripts (page.evaluate, addInitScript),
+  cookies, storage or page content. A mocked
+  error is usually the point of the test.
 
 If the evidence shows the APPLICATION failing
 (a 5xx response, an uncaught page exception),

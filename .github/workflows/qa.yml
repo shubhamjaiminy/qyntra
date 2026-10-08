@@ -56,6 +56,15 @@ jobs:
       - name: Run hand-written tests
         run: npm test
 
+      # Proves the AI provider answers before the run relies on it, so a
+      # retired model or revoked key shows up as a clear warning here.
+      - name: Qyntra setup check
+        if: ${{ !cancelled() }}
+        run: npm run qyntra -- doctor
+        env:
+          QYNTRA_AI_PROVIDER: ${{ secrets.GEMINI_API_KEY != '' && 'gemini' || 'none' }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
       # The product, run on itself: discover the app, generate and run
       # tests, analyse failures, and decide. Exits 1 when the release is
       # UNSAFE, which fails this check; the verdict and its reasons are

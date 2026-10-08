@@ -6,6 +6,7 @@ import {
   CompletionRequest,
   FailureContext,
   AIAnalysis,
+  withRetry,
 } from './provider';
 import {
   ANALYSIS_JSON_SCHEMA,
@@ -57,7 +58,7 @@ export class OpenAIProvider
     request: CompletionRequest
   ): Promise<string> {
     const response =
-      await this.client.responses.create({
+      await withRetry(() => this.client.responses.create({
         model: this.model,
 
         input: [
@@ -88,7 +89,7 @@ export class OpenAIProvider
             ],
           },
         ],
-      });
+      }));
 
     return response.output_text;
   }

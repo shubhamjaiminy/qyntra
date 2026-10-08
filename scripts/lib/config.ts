@@ -105,7 +105,12 @@ export const AI_PROVIDER_DEFAULTS: Record<
   { model: string; apiKeyEnv: string; baseUrl?: string }
 > = {
   openai: { model: 'gpt-5-mini', apiKeyEnv: 'OPENAI_API_KEY' },
-  gemini: { model: 'gemini-2.5-flash', apiKeyEnv: 'GEMINI_API_KEY' },
+  // Pinned, not "gemini-flash-latest": a gate's model must not change
+  // under it between runs. Google retires models; `qyntra doctor`
+  // sends a real request so a retired one is caught before a run.
+  // Not the newest: on the free tier the newest model was persistently
+  // overloaded (503 through every retry) while 3.5 answered in seconds.
+  gemini: { model: 'gemini-3.5-flash', apiKeyEnv: 'GEMINI_API_KEY' },
   ollama: {
     model: 'qwen2.5-coder:7b',
     apiKeyEnv: '',

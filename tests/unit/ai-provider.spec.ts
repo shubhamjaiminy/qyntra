@@ -174,7 +174,7 @@ test.describe('ai config from file and environment', () => {
 
     const ai = loadConfig({ rootDir: root, configPath: 'gemini.json' }).ai;
 
-    expect(ai.model).toBe('gemini-2.5-flash');
+    expect(ai.model).toBe('gemini-3.5-flash');
     expect(ai.apiKeyEnv).toBe('GEMINI_API_KEY');
   });
 
@@ -184,7 +184,7 @@ test.describe('ai config from file and environment', () => {
     const ai = loadConfig({ rootDir: root }).ai;
 
     expect(ai.provider).toBe('gemini');
-    expect(ai.model).toBe('gemini-2.5-flash');
+    expect(ai.model).toBe('gemini-3.5-flash');
   });
 
   test('the CLI and the stages resolve the same provider', () => {

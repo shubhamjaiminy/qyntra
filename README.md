@@ -129,9 +129,22 @@ A 7B model needs about 8 GB of free RAM and takes a few seconds to tens
 of seconds per failure. To share one GPU machine across a team or CI,
 point `"baseUrl"` at it, e.g. `"http://gpu-box:11434"`.
 
-If the provider is unreachable or out of quota, Qyntra notices on the
-first failure and analyzes the rest deterministically, rather than
+Temporary provider errors — 503 "high demand", gateway errors, rate
+limits — are retried after about 2, 6 and 15 seconds. If the provider is
+still unavailable, or the account is out of quota, Qyntra stops calling
+it and analyzes the remaining failures deterministically, rather than
 repeating the same error for every failing test.
+
+`qyntra doctor` sends one tiny real request to cloud providers. A key
+that is set proves nothing on its own: the model may have been retired
+(Google retires Gemini models for new accounts), or the account may be
+out of credit. Doctor reports the provider's own message.
+
+The default Gemini model is pinned (`gemini-3.5-flash`), not an alias
+like `gemini-flash-latest`, so the model behind a release decision does
+not change between runs without you choosing it. It is deliberately not
+the newest: on the free tier the newest model was persistently
+overloaded while this one answered in seconds.
 
 ### Authentication
 
@@ -266,6 +279,12 @@ the test can fail. A patch is refused if it:
   (`getByText('Saved')` … `toHaveText('Saved')` can never fail)
 - adds `test.skip`, `.fixme`, `.fail`, `.only`, `try`/`.catch()`,
   `expect.soft`, `.not`, `force: true` or `waitForTimeout`
+- changes what the test **simulates** — network mocks (`page.route`,
+  `route.fulfill`), injected scripts (`page.evaluate`,
+  `addInitScript`), cookies, storage or page content. A mocked 500 is
+  usually the point of a test ("shows an error banner when the API
+  fails"); turning it into a 200 makes a passing test about something
+  else.
 
 Constructs your test already used are not held against the patch.
 Patches that change an **expected value** are verified like any other,
@@ -536,7 +555,8 @@ Stated plainly, because you will find them anyway:
   one, failures are still diagnosed but no patches are proposed. Repair
   quality depends on the model: a local 7B model reliably fixes broken
   locators but often finds no *safe* fix for a wrong expected value — it
-  reports that rather than producing a weaker test.
+  reports that rather than producing a weaker test. Gemini fixed both
+  kinds in testing.
 - **Run history is a cached file, not a database.** It lives in your CI
   cache, is bounded to `historyRuns`, and keys on test title — renaming a
   test resets its baseline. Evicting the cache costs you flakiness

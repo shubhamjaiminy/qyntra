@@ -137,6 +137,51 @@ test.describe('expectation changes', () => {
   });
 });
 
+test.describe('scenario protection', () => {
+  const MOCKED = `test('shows an error banner when the API fails', async ({ page }) => {
+  await page.route('**/api/todos', (route) => route.fulfill({ status: 500 }));
+  await page.goto('/');
+  await page.evaluate(() => localStorage.setItem('seen', '1'));
+  await expect(page.getByRole('alert')).toHaveText('Could not load todos');
+});
+`;
+
+  test('refuses changing a mocked response', () => {
+    const patched = MOCKED.replace('status: 500', 'status: 200');
+
+    expect(checkGuardrails(MOCKED, patched).join(' ')).toMatch(/simulates/);
+  });
+
+  test('refuses changing injected page state', () => {
+    const patched = MOCKED.replace("setItem('seen', '1')", "setItem('seen', '0')");
+
+    expect(checkGuardrails(MOCKED, patched).join(' ')).toMatch(/simulates/);
+  });
+
+  test('a locator repair in a mocked test is still allowed', () => {
+    const patched = MOCKED.replace("getByRole('alert')", "getByTestId('error-banner')");
+
+    expect(checkGuardrails(MOCKED, patched)).toEqual([]);
+  });
+});
+
+test.describe('expectation changes elsewhere in the file', () => {
+  test('an identical matcher in another test does not hide a changed value', () => {
+    const file = `test('a', async ({ page }) => {
+  await expect(page.getByTestId('count')).toHaveText('1 item left');
+});
+
+test('b', async ({ page }) => {
+  await expect(page.getByTestId('count')).toHaveText('5 items left');
+});
+`;
+
+    const patched = file.replace("'5 items left'", "'1 item left'");
+
+    expect(changesExpectation(file, patched)).toBe(true);
+  });
+});
+
 test.describe('repair proposals', () => {
   test('a proposal with no usable edits cannot repair', () => {
     expect(

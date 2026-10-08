@@ -6,6 +6,7 @@ import {
   CompletionRequest,
   FailureContext,
   AIAnalysis,
+  withRetry,
 } from './provider';
 import {
   ANALYSIS_JSON_SCHEMA,
@@ -61,7 +62,7 @@ export class GeminiProvider
     request: CompletionRequest
   ): Promise<string> {
     const response =
-      await this.client.models.generateContent({
+      await withRetry(() => this.client.models.generateContent({
         model: this.model,
 
         contents: [
@@ -98,7 +99,7 @@ export class GeminiProvider
           responseJsonSchema:
             request.schema,
         },
-      });
+      }));
 
     return response.text ?? '';
   }

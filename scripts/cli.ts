@@ -59,8 +59,9 @@ import {
 } from './lib/release-intelligence';
 
 import { checkOllama } from './ai/ollama-provider';
-import { describeProvider } from './ai/create-provider';
-import { log, stage } from './lib/logger';
+import { createProvider, describeProvider } from './ai/create-provider';
+import { PING_REQUEST } from './ai/provider';
+import { log, redact, stage } from './lib/logger';
 
 import {
   authenticate,
@@ -354,6 +355,42 @@ function commandInit(args: ParsedArgs): number {
  * Exists to cut onboarding support load: every check that fails here is
  * a support ticket that does not get filed.
  */
+/** Null when the configured cloud model answered, else why not. */
+async function pingProvider(config: QyntraConfig): Promise<string | null> {
+  try {
+    const provider = createProvider(config.ai);
+
+    if (!provider) {
+      return null;
+    }
+
+    const text = await Promise.race([
+      provider.completeJSON(PING_REQUEST),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('no answer within 60s')), 60_000)
+      ),
+    ]);
+
+    return /"ok"\s*:\s*true/.test(text)
+      ? null
+      : 'it answered, but not with the JSON Qyntra asked for';
+  } catch (error: any) {
+    return redact(providerErrorMessage(error));
+  }
+}
+
+/** SDKs often put the useful part of an error inside a JSON body. */
+function providerErrorMessage(error: any): string {
+  const raw = String(error?.message ?? error);
+
+  try {
+    const parsed = JSON.parse(raw);
+    return String(parsed?.error?.message ?? raw).slice(0, 300);
+  } catch {
+    return raw.slice(0, 300);
+  }
+}
+
 async function commandDoctor(args: ParsedArgs): Promise<number> {
   stage('QYNTRA DOCTOR');
 
@@ -409,9 +446,21 @@ async function commandDoctor(args: ParsedArgs): Promise<number> {
       );
     }
   } else if (process.env[config.ai.apiKeyEnv]) {
-    log.info(
-      `AI provider   : ${providerLabel} (${config.ai.apiKeyEnv} is set)`
-    );
+    // A key that exists proves nothing: the model may be retired, the
+    // key revoked, the account out of credit. One tiny real request
+    // finds out now instead of halfway through a CI run.
+    const problem = await pingProvider(config);
+
+    if (problem === null) {
+      log.info(
+        `AI provider   : ${providerLabel}, answered a test request`
+      );
+    } else {
+      log.warn(
+        `${providerLabel} did not answer a test request: ${problem} — ` +
+          'until fixed, Qyntra falls back to the deterministic analyzer.'
+      );
+    }
   } else {
     log.warn(
       `${config.ai.apiKeyEnv} is not set — Qyntra will fall back to ` +

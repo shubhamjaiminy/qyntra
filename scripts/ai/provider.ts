@@ -97,7 +97,10 @@ export function isProviderOutage(error: any): boolean {
 
   const status = Number(error?.status ?? error?.code);
 
-  if ([401, 403, 429].includes(status)) {
+  // 404: the model is retired or misspelt, and will be on every call.
+  // 5xx: callers reach this only after withRetry gave up, so the
+  // provider is down rather than briefly overloaded.
+  if ([401, 403, 404, 429, 500, 502, 503, 504].includes(status)) {
     return true;
   }
 
@@ -113,3 +116,63 @@ export function isProviderOutage(error: any): boolean {
     text.includes('api key')
   );
 }
+
+/** Waits between retries of a transient provider error. */
+export const RETRY_DELAYS_MS = [2_000, 6_000, 15_000];
+
+/**
+ * True for errors that a short wait can fix: overload (503), gateway
+ * errors, and rate limits. A 429 that says the account is out of
+ * quota or credits is not transient — retrying only delays the
+ * fallback.
+ */
+export function isTransient(error: any): boolean {
+  const status = Number(error?.status ?? error?.code);
+  const text = String(error?.message ?? '').toLowerCase();
+
+  if (status === 429) {
+    return !/quota|credit|billing|insufficient/.test(text);
+  }
+
+  return (
+    [500, 502, 503, 504].includes(status) ||
+    /econnreset|etimedout|socket hang up/.test(text)
+  );
+}
+
+/**
+ * Run `call`, retrying transient failures with backoff. Cloud models
+ * return 503 "high demand" routinely; without this a busy minute at
+ * the provider downgrades a whole CI run to the deterministic analyzer.
+ */
+export async function withRetry<T>(
+  call: () => Promise<T>,
+  delaysMs: number[] = RETRY_DELAYS_MS,
+  sleep: (ms: number) => Promise<void> = (ms) =>
+    new Promise((resolve) => setTimeout(resolve, ms))
+): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await call();
+    } catch (error) {
+      if (attempt >= delaysMs.length || !isTransient(error)) {
+        throw error;
+      }
+
+      // Jitter, so parallel CI jobs do not retry in lockstep.
+      await sleep(delaysMs[attempt] * (0.75 + Math.random() * 0.5));
+    }
+  }
+}
+
+/** Smallest real request, used by `qyntra doctor` to prove the model answers. */
+export const PING_REQUEST: CompletionRequest = {
+  system: 'Reply with the JSON object {"ok": true} and nothing else.',
+  user: 'ping',
+  schema: {
+    type: 'object',
+    properties: { ok: { type: 'boolean' } },
+    required: ['ok'],
+  },
+};
+
