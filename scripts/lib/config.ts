@@ -216,6 +216,17 @@ export interface PerformanceConfig {
   maxEndpoints: number;
 }
 
+/** Which code change a run is judged as. */
+export interface ChangeConfig {
+  enabled: boolean;
+
+  /**
+   * Ref to diff against (via merge-base), e.g. "origin/main". Default:
+   * a PR's target branch in CI, else the last commit the gate judged.
+   */
+  base?: string;
+}
+
 export interface QyntraConfig {
   app: AppConfig;
   requirements: string[];
@@ -227,6 +238,7 @@ export interface QyntraConfig {
   remediation: RemediationConfig;
   api: ApiConfig;
   performance: PerformanceConfig;
+  change: ChangeConfig;
 
   /** Absolute path of the loaded config file, if any. */
   readonly configPath?: string;
@@ -300,6 +312,10 @@ function defaults(rootDir: string): QyntraConfig {
       enabled: true,
       samples: 10,
       maxEndpoints: 20,
+    },
+
+    change: {
+      enabled: true,
     },
 
     rootDir,
@@ -789,6 +805,17 @@ export function loadConfig(
     api: resolveApiConfig(merged.api),
 
     performance: resolvePerformanceConfig(merged.performance),
+
+    change: (() => {
+      const change = isPlainObject(merged.change) ? merged.change : {};
+
+      return {
+        enabled: change.enabled !== false,
+        ...(change.base !== undefined
+          ? { base: assertNonEmptyString(change.base, 'change.base', 'A git ref, e.g. "origin/main".') }
+          : {}),
+      };
+    })(),
 
     configPath,
     rootDir,

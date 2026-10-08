@@ -103,7 +103,9 @@ export type RiskFactorSource =
   /** Inferred from the requirement text, not observed. */
   | 'requirement'
   /** A recorded release outcome: production said so. */
-  | 'history';
+  | 'history'
+  /** What this release changed in the codebase. */
+  | 'change';
 
 export interface RiskFactor {
   points: number;
@@ -546,17 +548,20 @@ function buildReasoning(
   // Production outcomes are reported apart from what discovery saw, so
   // the reasoning never credits discovery with an incident it did not
   // observe.
-  const history = factors.filter((factor) => factor.source === 'history');
+  const describe = (source: RiskFactor['source'], intro: string) => {
+    const matching = factors.filter((factor) => factor.source === source);
+
+    return matching.length === 0
+      ? ''
+      : ` ${intro}: ${matching.map((factor) => factor.reason.toLowerCase()).join('; ')}.`;
+  };
 
   const historyClause =
-    history.length === 0
-      ? ''
-      : ` Recorded release outcomes add: ${history
-          .map((factor) => factor.reason.toLowerCase())
-          .join('; ')}.`;
+    describe('change', 'The code change adds') +
+    describe('history', 'Recorded release outcomes add');
 
   const top = factors
-    .filter((factor) => factor.source !== 'history')
+    .filter((factor) => factor.source !== 'history' && factor.source !== 'change')
     .sort((a, b) => b.points - a.points)
     .slice(0, 3)
     .map((factor) => factor.reason.toLowerCase());
@@ -790,7 +795,10 @@ function deriveScenarios(
 export function assessRisk(
   requirement: string,
   surface: DiscoveredSurface | undefined,
-  /** Factors from recorded release outcomes (lib/release-outcomes). */
+  /**
+   * Factors from outside the running app: recorded release outcomes
+   * (lib/release-outcomes) and the code change (lib/change-intelligence).
+   */
   historyFactors: RiskFactor[] = []
 ): RiskAssessment {
   const profile = profileSurface(surface);

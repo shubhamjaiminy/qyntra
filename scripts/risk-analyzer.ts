@@ -20,6 +20,7 @@ import {
   type DiscoveredSurface,
 } from './lib/risk-intelligence';
 import { outcomeRiskFactors, readOutcomes } from './lib/release-outcomes';
+import { changeRiskFactors, type ChangeAnalysis } from './lib/change-intelligence';
 
 const requirement = process.argv.slice(2).join(' ').trim();
 
@@ -49,7 +50,23 @@ const historyFactors = outcomeRiskFactors(
   )
 );
 
-const assessment = assessRisk(requirement, applicationMap, historyFactors);
+// What this release changed in the code, analysed once by the CLI.
+const change = readOptionalArtifact<ChangeAnalysis>(paths.changeAnalysis);
+
+const changeFactors = change
+  ? changeRiskFactors(
+      change,
+      requirement,
+      (applicationMap?.capabilities ?? []).map((capability) =>
+        String(capability.name ?? '')
+      )
+    )
+  : [];
+
+const assessment = assessRisk(requirement, applicationMap, [
+  ...changeFactors,
+  ...historyFactors,
+]);
 
 writeArtifact(paths.riskAnalysis, {
   generatedAt: new Date().toISOString(),

@@ -65,6 +65,12 @@ import { loadOpenApi } from './lib/openapi-loader';
 import { PING_REQUEST } from './ai/provider';
 import { log, redact, stage } from './lib/logger';
 import {
+  analyzeChange,
+  coverageGaps,
+  findTestFiles,
+  type ChangeAnalysis,
+} from './lib/change-intelligence';
+import {
   applyPerformance,
   detectRegressions,
   type PerformanceSnapshot,
@@ -808,6 +814,23 @@ function buildDecision(
       )
     : decision;
 
+  // Areas the change touched that no test mentions.
+  const change = readOptionalArtifact<ChangeAnalysis>(paths.changeAnalysis);
+
+  if (change?.available) {
+    const testNames = [
+      ...(failuresArtifact?.tests ?? []).map((entry) => String(entry.test ?? '')),
+      ...findTestFiles(config.rootDir),
+    ];
+
+    for (const gap of coverageGaps(change, testNames).slice(0, 5)) {
+      gated.warnings.push(
+        `This change touches "${gap.area}" (${gap.files.length} file(s), ${gap.lines} line(s)) ` +
+          'but no test mentions it. Add a requirement or test for it.'
+      );
+    }
+  }
+
   const remediationArtifact = readOptionalArtifact<{
     resultsGeneratedAt?: string;
     repairs?: { status?: string; reviewRequired?: boolean; applied?: boolean }[];
@@ -941,6 +964,56 @@ function commandGate(args: ParsedArgs): number {
   return decision.verdict === 'UNSAFE'
     ? EXIT_QUALITY_GATE_FAILED
     : EXIT_OK;
+}
+
+// --------------------------------------------------
+// CHANGE INTELLIGENCE
+// --------------------------------------------------
+
+function analyzeAndPrintChange(config: QyntraConfig, paths: ArtifactPaths): ChangeAnalysis {
+  stage('CHANGE INTELLIGENCE');
+
+  const analysis: ChangeAnalysis = config.change.enabled
+    ? analyzeChange(config.rootDir, {
+        explicit: config.change.base,
+        runs: readHistory(paths.runHistory).runs,
+      })
+    : { available: false, reason: 'Disabled (change.enabled = false).' };
+
+  writeArtifact(paths.changeAnalysis, { generatedAt: new Date().toISOString(), ...analysis });
+
+  if (!analysis.available) {
+    log.warn(`No change analysis: ${analysis.reason} Risk is rated without it.`);
+    return analysis;
+  }
+
+  log.info(`Compared with : ${analysis.base.slice(0, 12)} (${analysis.baseReason})`);
+  log.info(
+    `Changed       : ${analysis.totals.files} file(s), +${analysis.totals.added} ` +
+      `-${analysis.totals.removed}`
+  );
+
+  const byKind = new Map<string, number>();
+
+  for (const file of analysis.files) {
+    byKind.set(file.kind, (byKind.get(file.kind) ?? 0) + 1);
+  }
+
+  log.info(
+    `By kind       : ${[...byKind].map(([kind, count]) => `${count} ${kind}`).join(', ') || 'nothing'}`
+  );
+
+  const sensitive = [...new Set(analysis.files.flatMap((file) => file.sensitive))];
+
+  if (sensitive.length > 0) {
+    log.info(`Sensitive     : ${sensitive.join(', ')}`);
+  }
+
+  for (const area of analysis.areas.slice(0, 8)) {
+    log.info(`  area ${area.name}: ${area.files.length} file(s), ${area.lines} line(s)`);
+  }
+
+  return analysis;
 }
 
 // --------------------------------------------------
@@ -1135,6 +1208,9 @@ async function commandRun(args: ParsedArgs): Promise<number> {
     );
     return discoveryStatus;
   }
+
+  // What this release changed in the code. Before risk, which uses it.
+  analyzeAndPrintChange(config, paths);
 
   for (const requirement of config.requirements) {
     runStage(

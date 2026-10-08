@@ -505,6 +505,56 @@ never judged still counts towards risk, and is reported separately.
 
 ---
 
+## What changed in this release
+
+Qyntra runs inside your repository, so it reads the diff. A README typo
+and a rewrite of the payment flow should not be judged the same way.
+
+```
+CHANGE INTELLIGENCE
+Compared with : 4e489ebbed33 (pull request target origin/main)
+Changed       : 6 file(s), +212 -40
+By kind       : 3 source, 2 test, 1 dependency
+Sensitive     : payments
+  area checkout: 2 file(s), 180 line(s)
+```
+
+The base is, in order: `change.base` (or `QYNTRA_BASE_REF`); a pull
+request's target branch; the last commit this gate judged — "what
+changed since the gate last looked"; the previous commit. The diff runs
+against the working tree, so uncommitted local changes count.
+
+The change feeds risk as `[change]` factors, at most +3 in total:
+
+| Change | Points |
+| ------ | ------ |
+| Application code under auth, payments, data/migrations or security paths | +2 each |
+| Dependency manifests or lockfiles | +1 |
+| A changed area shares words with the requirement under test | +1 each |
+| More than 500 lines of application code | +1 |
+
+Tests, docs and config add nothing — a docs-only release is rated on the
+application alone. And a changed area that no test mentions, by title
+or file path, becomes a warning:
+
+```
+- This change touches "checkout" (2 file(s), 180 line(s)) but no test mentions it.
+```
+
+Only paths, line counts and quoted route strings on added lines are
+read. In CI, check out with full history so the base is available:
+
+```yaml
+- uses: actions/checkout@v6
+  with:
+    fetch-depth: 0
+```
+
+Without it, Qyntra reports that the change could not be analysed and
+rates risk without it.
+
+---
+
 ## How risk is rated
 
 Risk multiplies the cost of a failure, so it is derived from what
@@ -628,6 +678,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0    # change intelligence needs history
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -762,8 +814,11 @@ Stated plainly, because you will find them anyway:
   light sequential measurement, not by generating load; capacity and
   concurrency limits are out of scope. LLM-feature testing is not
   implemented.
-- **The codebase is not an input.** Discovery is black-box. Risk is
-  derived from the application surface, not from your diff.
+- **Change analysis reads paths, not semantics.** Risk from the diff
+  comes from file paths, line counts and route strings — it knows a
+  payment file changed, not what the change does. Coverage gaps are
+  word matches between changed areas and test names, so they are
+  warnings, never blocks.
 - **Repair needs an AI provider and fixes test defects only.** Without
   one, failures are still diagnosed but no patches are proposed. Repair
   quality depends on the model: a local 7B model reliably fixes broken
