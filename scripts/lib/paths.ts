@@ -30,6 +30,12 @@ export interface ArtifactPaths {
   runHistory: string;
   dashboard: string;
 
+  /** Outcome of every attempted repair. */
+  remediation: string;
+
+  /** Verified .patch files, plus backups while a patch is on disk. */
+  remediationDir: string;
+
   /** Playwright's JSON reporter output. */
   playwrightResults: string;
 
@@ -70,6 +76,8 @@ export function artifactPaths(
     releaseDecision: path.join(outputDir, 'release-decision.json'),
     runHistory: path.join(outputDir, 'run-history.json'),
     dashboard: path.join(outputDir, 'index.html'),
+    remediation: path.join(outputDir, 'remediation.json'),
+    remediationDir: path.join(outputDir, 'remediation'),
 
     playwrightResults: resolveFromRoot(
       config.rootDir,

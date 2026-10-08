@@ -663,6 +663,37 @@ function buildDecision(
     },
   });
 
+  // Verified repairs never change the score — the patch is not applied
+  // yet, so the test is still red — but they change what to do next.
+  const remediationArtifact = readOptionalArtifact<{
+    resultsGeneratedAt?: string;
+    repairs?: { status?: string; reviewRequired?: boolean; applied?: boolean }[];
+  }>(paths.remediation);
+
+  if (
+    remediationArtifact &&
+    remediationArtifact.resultsGeneratedAt === failuresArtifact?.generatedAt
+  ) {
+    const verified = (remediationArtifact.repairs ?? []).filter(
+      (repair) => repair.status === 'verified' && !repair.applied
+    );
+    const needsReview = verified.filter((repair) => repair.reviewRequired);
+
+    if (verified.length > 0) {
+      decision.warnings.push(
+        `${verified.length} failing test(s) have a verified repair ready ` +
+          `(${paths.remediationDir}). Apply with: qyntra repair --apply`
+      );
+    }
+
+    if (needsReview.length > 0) {
+      decision.warnings.push(
+        `${needsReview.length} of those repair(s) change an expected value. ` +
+          'Confirm the new value is correct behaviour before applying.'
+      );
+    }
+  }
+
   // Record this run only after the verdict is decided, so the run being
   // judged is never part of its own baseline.
   recordRun(config, paths, failuresArtifact, decision, risk, execution);
@@ -765,6 +796,27 @@ function commandGate(args: ParsedArgs): number {
   return decision.verdict === 'UNSAFE'
     ? EXIT_QUALITY_GATE_FAILED
     : EXIT_OK;
+}
+
+// --------------------------------------------------
+// COMMAND: repair
+// --------------------------------------------------
+
+/**
+ * Repair from the last run's artifacts. Without --apply this only
+ * proposes and verifies; with it, verified patches are written into
+ * the test files. Exit code reflects the stage, not how many repairs
+ * succeeded: "no safe repair" is a valid answer.
+ */
+function commandRepair(args: ParsedArgs): number {
+  const config = configFrom(args);
+
+  return runStage(
+    'AI REMEDIATION',
+    'repair',
+    args.flags.apply === true ? ['--apply'] : [],
+    config
+  );
 }
 
 // --------------------------------------------------
@@ -872,6 +924,12 @@ async function commandRun(args: ParsedArgs): Promise<number> {
   runStage('FAILURE AGGREGATION', 'analyze-failures', [], config);
   runStage('FAILURE INTELLIGENCE', 'ai-analyzer', [], config);
 
+  // Propose-only inside `run`: verified patches are written as .patch
+  // files, the test files themselves stay untouched.
+  if (config.remediation.enabled) {
+    runStage('AI REMEDIATION', 'repair', [], config);
+  }
+
   log.debug(`Playwright exit status: ${testRun.status ?? 'unknown'}`);
 
   // Gate first: the dashboard displays the gate's verdict, not its own.
@@ -922,6 +980,7 @@ Usage:
   qyntra login                Log in via app.auth and save the session
   qyntra run [requirement]    Full pipeline, ending in a release decision
   qyntra gate                 Release decision from existing artifacts
+  qyntra repair [--apply]     Propose and verify fixes for broken tests
   qyntra help                 Show this message
 
 Options:
@@ -929,6 +988,7 @@ Options:
   --url <url>       Override app.baseUrl
   --output <dir>    Override output.dir
   --force           Overwrite on init
+  --apply           repair: write verified patches into the test files
 
 Environment:
   QYNTRA_BASE_URL     Override app.baseUrl
@@ -990,6 +1050,9 @@ async function main(): Promise<number> {
 
     case 'run':
       return commandRun(args);
+
+    case 'repair':
+      return commandRepair(args);
 
     case 'help':
     case '--help':

@@ -216,6 +216,54 @@ function screenshotDataUri(
   }
 }
 
+/** The repair outcome for one failure card. Empty when none ran. */
+function renderRepair(
+  repair: RepairRecord | undefined
+): string {
+  if (!repair) {
+    return '';
+  }
+
+  const titles: Record<NonNullable<RepairRecord['status']>, string> = {
+    verified: repair.applied ? 'REPAIR APPLIED' : 'VERIFIED REPAIR',
+    'not-verified': 'NO SAFE REPAIR FOUND',
+    declined: 'REPAIR DECLINED',
+    flaky: 'NOT REPAIRED: FLAKY',
+    skipped: 'NOT REPAIRED',
+  };
+
+  const status = repair.status ?? 'skipped';
+
+  const note =
+    status === 'verified'
+      ? repair.applied
+        ? 'Written into the test file.'
+        : 'Re-ran and passed twice with this patch, then the original file was restored. ' +
+          'Apply with <code>npx qyntra repair --apply</code>.'
+      : '';
+
+  return `
+    <div class="ai-block evidence-block repair-${status}">
+      <div class="block-title">
+        ${escapeHtml(titles[status])}
+        ${repair.reviewRequired
+          ? '<span class="badge severity-medium">Review required: changes an expected value</span>'
+          : ''}
+      </div>
+      <div class="block-content">${escapeHtml(repair.summary ?? '')}</div>
+      ${note ? `<div class="block-content">${note}</div>` : ''}
+      ${repair.diff
+        ? `<pre class="code-block"><code>${escapeHtml(repair.diff)}</code></pre>`
+        : ''}
+      ${status === 'not-verified' && (repair.attemptLog ?? []).length > 0
+        ? `<ul class="evidence-list">${(repair.attemptLog ?? [])
+            .map((line) => `<li>${escapeHtml(line.split('\n')[0])}</li>`)
+            .join('')}</ul>`
+        : ''}
+    </div>
+  `;
+}
+
 /** What the browser saw, for one failure card. Empty when nothing. */
 function renderEvidence(
   evidence: FailureEvidence | undefined
@@ -440,6 +488,32 @@ const failureReport =
   readJson<FailureReport>(
     failurePath
   );
+
+type RepairRecord = {
+  test?: string;
+  status?: 'verified' | 'not-verified' | 'declined' | 'flaky' | 'skipped';
+  summary?: string;
+  diff?: string;
+  reviewRequired?: boolean;
+  applied?: boolean;
+  attemptLog?: string[];
+};
+
+const remediationReport =
+  readJson<{
+    resultsGeneratedAt?: string;
+    repairs?: RepairRecord[];
+  }>(
+    stagePaths().remediation
+  );
+
+// A repair report about other results would show patches for failures
+// that are not on this page.
+const repairs: RepairRecord[] =
+  remediationReport &&
+  remediationReport.resultsGeneratedAt === failureReport?.generatedAt
+    ? remediationReport.repairs ?? []
+    : [];
 
 const riskReport =
   readJson<RiskReport>(
@@ -922,6 +996,12 @@ const aiSection =
                         `
                         : ''
                     }
+
+                    ${renderRepair(
+                      repairs.find(
+                        (repair) => repair.test === analysis.test
+                      )
+                    )}
 
                     ${renderEvidence(
                       analysis.evidence

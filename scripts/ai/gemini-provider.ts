@@ -3,6 +3,7 @@ import { GoogleGenAI } from '@google/genai';
 import type { AIConfig } from '../lib/config';
 import {
   AIProvider,
+  CompletionRequest,
   FailureContext,
   AIAnalysis,
 } from './provider';
@@ -46,6 +47,19 @@ export class GeminiProvider
   async analyzeFailure(
     context: FailureContext
   ): Promise<AIAnalysis> {
+    return parseAnalysis(
+      await this.completeJSON({
+        system: SYSTEM_PROMPT,
+        user: userMessage(context),
+        schema: ANALYSIS_JSON_SCHEMA,
+        screenshot: context.screenshot,
+      })
+    );
+  }
+
+  async completeJSON(
+    request: CompletionRequest
+  ): Promise<string> {
     const response =
       await this.client.models.generateContent({
         model: this.model,
@@ -55,20 +69,17 @@ export class GeminiProvider
             role: 'user',
             parts: [
               {
-                text:
-                  userMessage(
-                    context
-                  ),
+                text: request.user,
               },
 
-              ...(context.screenshot
+              ...(request.screenshot
                 ? [
                     {
                       inlineData: {
                         mimeType:
-                          context.screenshot.mimeType,
+                          request.screenshot.mimeType,
                         data:
-                          context.screenshot.base64,
+                          request.screenshot.base64,
                       },
                     },
                   ]
@@ -79,18 +90,16 @@ export class GeminiProvider
 
         config: {
           systemInstruction:
-            SYSTEM_PROMPT,
+            request.system,
 
           responseMimeType:
             'application/json',
 
           responseJsonSchema:
-            ANALYSIS_JSON_SCHEMA,
+            request.schema,
         },
       });
 
-    return parseAnalysis(
-      response.text
-    );
+    return response.text ?? '';
   }
 }

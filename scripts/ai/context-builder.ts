@@ -11,7 +11,7 @@ const MAX_SCREENSHOT_BYTES = 5 * 1024 * 1024;
 
 export function buildFailureContext(
   failure: any,
-  options: { includeScreenshot?: boolean } = {}
+  options: { includeScreenshot?: boolean; includeDomElements?: boolean } = {}
 ): FailureContext {
   const applicationMapPath =
     stagePaths().applicationMap;
@@ -80,6 +80,12 @@ export function buildFailureContext(
       pageErrors: evidence.pageErrors ?? [],
       failedRequests: evidence.failedRequests ?? [],
       steps: evidence.steps ?? [],
+      // The element list is for choosing a locator during repair. In
+      // diagnosis it made a 7B model read "the element exists" as "the
+      // app is wrong" and misattribute test defects, so it is opt-in.
+      ...(options.includeDomElements && evidence.domElements
+        ? { domElements: evidence.domElements }
+        : {}),
     };
   }
 

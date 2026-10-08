@@ -62,7 +62,29 @@ function buildZip(files: Record<string, string>, method = 8): Buffer {
 const ndjson = (events: unknown[]) =>
   events.map((event) => JSON.stringify(event)).join('\n') + '\n';
 
+// Two snapshots of one frame; the second reuses the first's nodes by
+// reference, the way Playwright writes incremental snapshots.
+const FIRST_DOM = [
+  'HTML', {},
+  ['BODY', {},
+    ['SPAN', { class: 'todo-count', 'data-testid': 'todo-count' }, ['STRONG', {}, '1'], ' item left'],
+    ['UL', { class: 'todo-list' }, ['LI', { 'data-testid': 'todo-item' }, 'buy milk']],
+    ['SCRIPT', {}, 'secret()'],
+  ],
+];
+
 const CONTEXT_TRACE = ndjson([
+  { type: 'frame-snapshot', snapshot: { frameId: 'f1', isMainFrame: true, timestamp: 1, html: FIRST_DOM } },
+  {
+    type: 'frame-snapshot',
+    snapshot: {
+      frameId: 'f1',
+      isMainFrame: true,
+      timestamp: 2,
+      // Post-order of FIRST_DOM: '1'=0, STRONG=1, ' item left'=2, SPAN=3, 'buy milk'=4, LI=5, UL=6 ...
+      html: ['HTML', {}, ['BODY', {}, [[1, 3]], [[1, 6]], ['BUTTON', { 'aria-label': 'Delete' }]]],
+    },
+  },
   { type: 'console', messageType: 'info', text: 'React DevTools hint' },
   {
     type: 'console',
@@ -221,6 +243,20 @@ test.describe('evidence extraction', () => {
 
     expect(hasSignals(evidence)).toBe(false);
     expect(collectEvidence(undefined).steps).toEqual([]);
+  });
+});
+
+test.describe('dom at failure', () => {
+  test('resolves incremental snapshot references to real elements', () => {
+    const elements = collectEvidence(attachments()).domElements ?? [];
+
+    expect(elements).toContain('span.todo-count [data-testid="todo-count"] "1 item left"');
+    expect(elements).toContain('li [data-testid="todo-item"] "buy milk"');
+    expect(elements).toContain('button [aria-label="Delete"]');
+  });
+
+  test('scripts are never included', () => {
+    expect((collectEvidence(attachments()).domElements ?? []).join('\n')).not.toContain('secret');
   });
 });
 

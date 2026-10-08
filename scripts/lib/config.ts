@@ -157,6 +157,18 @@ export interface OutputConfig {
   dir: string;
 }
 
+/**
+ * AI remediation: propose a patch for each failing test diagnosed as a
+ * test defect, and verify it by re-running the test. `run` only ever
+ * proposes; files change only with `qyntra repair --apply`.
+ */
+export interface RemediationConfig {
+  enabled: boolean;
+
+  /** Bound on repairs per run, so one bad deploy cannot cost an hour. */
+  maxRepairs: number;
+}
+
 export interface QyntraConfig {
   app: AppConfig;
   requirements: string[];
@@ -165,6 +177,7 @@ export interface QyntraConfig {
   execution: ExecutionConfig;
   ai: AIConfig;
   gate: GateConfig;
+  remediation: RemediationConfig;
 
   /** Absolute path of the loaded config file, if any. */
   readonly configPath?: string;
@@ -221,6 +234,11 @@ function defaults(rootDir: string): QyntraConfig {
       blockOnProductDefect: true,
       blockOnNewRegression: true,
       historyRuns: 50,
+    },
+
+    remediation: {
+      enabled: true,
+      maxRepairs: 5,
     },
 
     rootDir,
@@ -701,9 +719,45 @@ export function loadConfig(
       ),
     },
 
+    remediation: resolveRemediationConfig(merged.remediation),
+
     configPath,
     rootDir,
   };
+}
+
+export function resolveRemediationConfig(raw: unknown): RemediationConfig {
+  const remediation = isPlainObject(raw) ? raw : {};
+
+  return {
+    enabled: remediation.enabled !== false,
+    maxRepairs: validateNumber(
+      remediation.maxRepairs ?? 5,
+      'remediation.maxRepairs',
+      0,
+      100
+    ),
+  };
+}
+
+/** Lenient stage-level read, like stageAIConfig(). */
+export function stageRemediationConfig(
+  rootDir: string = process.cwd()
+): RemediationConfig {
+  const configPath = findConfigFile(rootDir);
+
+  let raw: unknown = {};
+
+  if (configPath !== undefined) {
+    try {
+      raw =
+        JSON.parse(fs.readFileSync(configPath, 'utf-8'))?.remediation ?? {};
+    } catch {
+      // `qyntra doctor` reports the malformed file precisely.
+    }
+  }
+
+  return resolveRemediationConfig(raw);
 }
 
 /**

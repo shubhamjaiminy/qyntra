@@ -49,6 +49,14 @@ export interface FailureEvidence {
 
   /** The test's own actions, in order, with the failing one marked. */
   steps: string[];
+
+  /**
+   * Elements on the page at failure, with the attributes a locator can
+   * use (data-testid, id, role, label, classes) and their text. The
+   * accessibility snapshot omits test ids and classes; a locator repair
+   * needs them.
+   */
+  domElements?: string[];
 }
 
 interface Attachment {
@@ -63,6 +71,7 @@ const MAX_CONSOLE_ERRORS = 10;
 const MAX_PAGE_ERRORS = 5;
 const MAX_FAILED_REQUESTS = 15;
 const MAX_STEPS = 15;
+const MAX_DOM_ELEMENTS = 80;
 
 /**
  * Top-level event logs: test.trace (the runner's steps) and
@@ -165,6 +174,7 @@ function readTrace(filePath: string, evidence: FailureEvidence): void {
       collectSteps(events, evidence);
     } else {
       collectPageSignals(events, evidence);
+      collectDomElements(events, evidence);
     }
   }
 }
@@ -310,6 +320,220 @@ function collectSteps(events: any[], evidence: FailureEvidence): void {
 
   // The last steps are the ones that explain the failure.
   evidence.steps = steps.slice(-MAX_STEPS);
+}
+
+// --------------------------------------------------
+// DOM AT FAILURE
+// --------------------------------------------------
+
+/** A serialised DOM node: text, [tag, attrs, ...children], or a reference. */
+type SnapshotNode = string | [string, Record<string, string>?, ...unknown[]] | [[number, number]];
+
+const SKIPPED_TAGS = new Set([
+  'SCRIPT', 'STYLE', 'HEAD', 'META', 'LINK', 'NOSCRIPT', 'TEMPLATE', 'SVG', 'PATH',
+]);
+
+/** Attributes that make an element addressable, in locator preference. */
+const LOCATOR_ATTRIBUTES = [
+  'data-testid', 'data-test', 'data-qa', 'id', 'name', 'role',
+  'aria-label', 'placeholder', 'title', 'type', 'href', 'for',
+];
+
+/**
+ * Decode the last main-frame DOM snapshot in a context trace.
+ *
+ * Playwright stores later snapshots incrementally: a node may be
+ * [[offset, index]], meaning "node `index`, in post-order, of the
+ * snapshot `offset` steps earlier in this frame". Resolution follows
+ * the trace viewer's own renderer.
+ */
+function collectDomElements(events: any[], evidence: FailureEvidence): void {
+  const byFrame = new Map<string, any[]>();
+
+  for (const event of events) {
+    if (event.type === 'frame-snapshot' && event.snapshot?.isMainFrame) {
+      const frameId = String(event.snapshot.frameId);
+      byFrame.set(frameId, [...(byFrame.get(frameId) ?? []), event.snapshot]);
+    }
+  }
+
+  // The frame snapshotted last is the page the test was on at failure.
+  const frames = [...byFrame.values()];
+  const snapshots = frames.sort(
+    (a, b) => (a.at(-1)?.timestamp ?? 0) - (b.at(-1)?.timestamp ?? 0)
+  ).at(-1);
+
+  if (!snapshots || snapshots.length === 0) {
+    return;
+  }
+
+  const postOrder = new Map<number, unknown[]>();
+
+  const nodesOf = (index: number): unknown[] => {
+    let nodes = postOrder.get(index);
+
+    if (!nodes) {
+      nodes = [];
+      const visit = (node: unknown) => {
+        if (typeof node === 'string') {
+          nodes!.push(node);
+        } else if (Array.isArray(node) && typeof node[0] === 'string') {
+          for (const child of node.slice(2)) {
+            visit(child);
+          }
+          nodes!.push(node);
+        }
+      };
+      visit(snapshots[index].html);
+      postOrder.set(index, nodes);
+    }
+
+    return nodes;
+  };
+
+  const elements: string[] = [];
+  let budget = 20_000; // nodes; a pathological DOM must not stall the stage
+
+  const resolve = (node: unknown, index: number): { node: unknown; index: number } | null => {
+    if (Array.isArray(node) && Array.isArray(node[0])) {
+      const [offset, nodeIndex] = node[0] as [number, number];
+      const target = index - offset;
+
+      if (target < 0 || target > index) {
+        return null;
+      }
+
+      const nodes = nodesOf(target);
+
+      return nodeIndex >= 0 && nodeIndex < nodes.length
+        ? resolve(nodes[nodeIndex], target)
+        : null;
+    }
+
+    return { node, index };
+  };
+
+  // Full text content, nested elements included, because that is what
+  // toHaveText compares against: <span>1 <b>item</b> left</span> reads
+  // "1 item left", not " left". Containers with more text than a short
+  // label get none — their text identifies nothing.
+  const MAX_TEXT = 80;
+
+  const textOf = (children: unknown[], index: number): string => {
+    let text = '';
+    let overflowed = false;
+
+    const collect = (node: unknown, at: number, depth: number) => {
+      if (overflowed || depth > 20) {
+        return;
+      }
+
+      if (text.length > MAX_TEXT * 2) {
+        overflowed = true;
+        return;
+      }
+
+      const resolved = resolve(node, at);
+
+      if (!resolved) {
+        return;
+      }
+
+      if (typeof resolved.node === 'string') {
+        text += resolved.node;
+      } else if (
+        Array.isArray(resolved.node) &&
+        typeof resolved.node[0] === 'string' &&
+        !SKIPPED_TAGS.has(resolved.node[0].toUpperCase())
+      ) {
+        for (const child of resolved.node.slice(2)) {
+          collect(child, resolved.index, depth + 1);
+        }
+      }
+    };
+
+    for (const child of children) {
+      collect(child, index, 0);
+    }
+
+    const normalized = text.replace(/\s+/g, ' ').trim();
+
+    return overflowed || normalized.length > MAX_TEXT ? '' : normalized;
+  };
+
+  const visit = (raw: unknown, index: number, depth: number): void => {
+    if (budget-- <= 0 || depth > 60 || elements.length >= MAX_DOM_ELEMENTS) {
+      return;
+    }
+
+    const resolved = resolve(raw, index);
+
+    if (!resolved || !Array.isArray(resolved.node) || typeof resolved.node[0] !== 'string') {
+      return;
+    }
+
+    const [tag, attrs = {}, ...children] = resolved.node as [string, Record<string, string>?, ...unknown[]];
+
+    if (SKIPPED_TAGS.has(tag.toUpperCase())) {
+      return;
+    }
+
+    const describe = describeElement(tag, attrs, textOf(children, resolved.index));
+
+    if (describe && !elements.includes(describe)) {
+      elements.push(describe);
+    }
+
+    for (const child of children) {
+      visit(child, resolved.index, depth + 1);
+    }
+  };
+
+  visit(snapshots[snapshots.length - 1].html, snapshots.length - 1, 0);
+
+  if (elements.length > 0) {
+    evidence.domElements = elements;
+  }
+}
+
+/**
+ * One line per addressable element, e.g.
+ *   span.todo-count [data-testid="todo-count"] "1 item left"
+ * Null for anonymous wrappers with neither attributes nor text.
+ */
+function describeElement(
+  tag: string,
+  attrs: Record<string, string>,
+  text: string
+): string | null {
+  const name = tag.toLowerCase();
+
+  const classes = String(attrs.class ?? '')
+    .split(/\s+/)
+    .filter((cls) => cls && !cls.startsWith('__playwright'))
+    .slice(0, 3)
+    .map((cls) => `.${cls}`)
+    .join('');
+
+  const parts = LOCATOR_ATTRIBUTES.filter(
+    (attr) => attrs[attr] !== undefined && attrs[attr] !== ''
+  ).map((attr) => {
+    const value = attr === 'href' ? sanitizeUrl(attrs[attr]) : attrs[attr];
+    return `[${attr}="${clean(value).slice(0, 80)}"]`;
+  });
+
+  const shownText = text ? ` "${clean(text).slice(0, 60)}"` : '';
+
+  if (parts.length === 0 && !classes && !shownText) {
+    return null;
+  }
+
+  // Bare text in a div/span with nothing else is mostly layout noise.
+  if (parts.length === 0 && !classes && ['div', 'span', 'p'].includes(name)) {
+    return null;
+  }
+
+  return `${name}${classes}${parts.length ? ' ' + parts.join(' ') : ''}${shownText}`;
 }
 
 /**

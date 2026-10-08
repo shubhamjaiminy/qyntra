@@ -1,6 +1,7 @@
 import type { AIConfig } from '../lib/config';
 import {
   AIProvider,
+  CompletionRequest,
   FailureContext,
   AIAnalysis,
   ProviderUnavailableError,
@@ -69,10 +70,23 @@ export class OllamaProvider
   async analyzeFailure(
     context: FailureContext
   ): Promise<AIAnalysis> {
+    return parseAnalysis(
+      await this.completeJSON({
+        system: SYSTEM_PROMPT,
+        user: userMessage(context),
+        schema: ANALYSIS_JSON_SCHEMA,
+        screenshot: context.screenshot,
+      })
+    );
+  }
+
+  async completeJSON(
+    request: CompletionRequest
+  ): Promise<string> {
     const images =
-      context.screenshot &&
+      request.screenshot &&
       (await this.supportsVision())
-        ? [context.screenshot.base64]
+        ? [request.screenshot.base64]
         : undefined;
 
     let response: Response;
@@ -95,7 +109,7 @@ export class OllamaProvider
               stream: false,
 
               format:
-                ANALYSIS_JSON_SCHEMA,
+                request.schema,
 
               // Greedy decoding with a fixed seed: the same failure
               // must get the same diagnosis on every run, or the gate
@@ -113,15 +127,12 @@ export class OllamaProvider
               messages: [
                 {
                   role: 'system',
-                  content: SYSTEM_PROMPT,
+                  content: request.system,
                 },
 
                 {
                   role: 'user',
-                  content:
-                    userMessage(
-                      context
-                    ),
+                  content: request.user,
                   ...(images ? { images } : {}),
                 },
               ],
@@ -158,8 +169,8 @@ export class OllamaProvider
     const body: any =
       await response.json();
 
-    return parseAnalysis(
-      body?.message?.content
+    return String(
+      body?.message?.content ?? ''
     );
   }
 }

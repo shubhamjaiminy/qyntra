@@ -22,6 +22,7 @@ export interface FailureContext {
       resourceType?: string;
     }[];
     steps: string[];
+    domElements?: string[];
   };
 
   /**
@@ -47,10 +48,30 @@ export interface AIAnalysis {
   isLikelyProductDefect: boolean;
 }
 
+/** One structured request, independent of what it is for. */
+export interface CompletionRequest {
+  system: string;
+  user: string;
+
+  /** JSON Schema for the response; enforced where the provider can. */
+  schema: object;
+
+  screenshot?: FailureContext['screenshot'];
+}
+
 export interface AIProvider {
   analyzeFailure(
     context: FailureContext
   ): Promise<AIAnalysis>;
+
+  /**
+   * Send a request and return the raw JSON text. Callers parse and
+   * validate it; diagnosis and repair share this so a provider only
+   * has to implement transport once.
+   */
+  completeJSON(
+    request: CompletionRequest
+  ): Promise<string>;
 }
 
 /**

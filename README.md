@@ -226,6 +226,59 @@ model's capabilities rather than guessing from its name.
 
 ---
 
+## Repairing broken tests
+
+When a failure is diagnosed as a **test defect**, Qyntra tries to fix the
+test and proves the fix before showing it to you:
+
+1. **Reproduce.** The test is re-run alone. If it passes, it is flaky, and
+   Qyntra leaves it alone — rewriting a flaky test fixes nothing.
+2. **Propose.** The model suggests minimal edits, choosing locators from
+   the elements actually on the page at failure (test ids, roles,
+   labels), taken from the trace.
+3. **Check.** The patch is refused before it runs if it would make the
+   test pass by checking less (see below).
+4. **Verify.** The patch is applied, the test is run twice, and the
+   original file is restored. If it still fails, the model sees the new
+   error and gets one more try.
+
+`qyntra run` only proposes: verified patches are written to
+`qyntra-out/remediation/*.patch` (standard unified diffs — `git apply`
+works), shown on the dashboard, and listed in the release decision's
+warnings. Your test files change only when you ask:
+
+```bash
+npx qyntra repair --apply
+```
+
+Failures attributed to the **product** are never repaired. Changing a
+test to agree with a bug is the one thing a quality gate must not do.
+
+### What a repair may not do
+
+A repair may change how a test finds things. It may not change whether
+the test can fail. A patch is refused if it:
+
+- removes or comments out an assertion, or removes a test
+- swaps a value check (`toHaveText`, `toHaveCount`, `toEqual`, …) for a
+  presence check (`toBeVisible`, …)
+- asserts on an element located by the very text it checks
+  (`getByText('Saved')` … `toHaveText('Saved')` can never fail)
+- adds `test.skip`, `.fixme`, `.fail`, `.only`, `try`/`.catch()`,
+  `expect.soft`, `.not`, `force: true` or `waitForTimeout`
+
+Constructs your test already used are not held against the patch.
+Patches that change an **expected value** are verified like any other,
+but marked *review required*: a passing test only proves the new value
+is what the app does now, not that it is what the app *should* do.
+
+If Qyntra is interrupted while a patch is on disk, the next run
+restores the original file before doing anything else. Repairs per run
+are capped by `"remediation": { "maxRepairs": 5 }`; set
+`"enabled": false` to switch remediation off.
+
+---
+
 ## How risk is rated
 
 Risk multiplies the cost of a failure, so it is derived from what
@@ -429,6 +482,7 @@ A broken pipeline never looks like a clean "unsafe" verdict.
 | `qyntra login` | Log in via `app.auth`, confirm it worked, save the session |
 | `qyntra run` | Full pipeline, ending in a release decision |
 | `qyntra gate` | Release decision from existing artifacts |
+| `qyntra repair [--apply]` | Propose and verify fixes for broken tests; `--apply` writes them |
 
 `gate` is separate from `run` so you can compute the verdict in a later
 CI job — commonly a required status check after the test job.
@@ -478,9 +532,11 @@ Stated plainly, because you will find them anyway:
   implemented.
 - **The codebase is not an input.** Discovery is black-box. Risk is
   derived from the application surface, not from your diff.
-- **`suggestedCode` is illustrative, not a patch.** Remediation proposes
-  a fix; it does not produce a diff against your spec files or re-run to
-  verify it.
+- **Repair needs an AI provider and fixes test defects only.** Without
+  one, failures are still diagnosed but no patches are proposed. Repair
+  quality depends on the model: a local 7B model reliably fixes broken
+  locators but often finds no *safe* fix for a wrong expected value — it
+  reports that rather than producing a weaker test.
 - **Run history is a cached file, not a database.** It lives in your CI
   cache, is bounded to `historyRuns`, and keys on test title — renaming a
   test resets its baseline. Evicting the cache costs you flakiness

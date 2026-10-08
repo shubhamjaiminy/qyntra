@@ -3,10 +3,12 @@ import OpenAI from 'openai';
 import type { AIConfig } from '../lib/config';
 import {
   AIProvider,
+  CompletionRequest,
   FailureContext,
   AIAnalysis,
 } from './provider';
 import {
+  ANALYSIS_JSON_SCHEMA,
   SYSTEM_PROMPT,
   parseAnalysis,
   userMessage,
@@ -41,6 +43,19 @@ export class OpenAIProvider
   async analyzeFailure(
     context: FailureContext
   ): Promise<AIAnalysis> {
+    return parseAnalysis(
+      await this.completeJSON({
+        system: SYSTEM_PROMPT,
+        user: userMessage(context),
+        schema: ANALYSIS_JSON_SCHEMA,
+        screenshot: context.screenshot,
+      })
+    );
+  }
+
+  async completeJSON(
+    request: CompletionRequest
+  ): Promise<string> {
     const response =
       await this.client.responses.create({
         model: this.model,
@@ -48,7 +63,7 @@ export class OpenAIProvider
         input: [
           {
             role: 'system',
-            content: SYSTEM_PROMPT,
+            content: request.system,
           },
 
           {
@@ -56,20 +71,17 @@ export class OpenAIProvider
             content: [
               {
                 type: 'input_text',
-                text:
-                  userMessage(
-                    context
-                  ),
+                text: request.user,
               },
 
-              ...(context.screenshot
+              ...(request.screenshot
                 ? [
                     {
                       type: 'input_image' as const,
                       detail: 'auto' as const,
                       image_url:
-                        `data:${context.screenshot.mimeType};base64,` +
-                        context.screenshot.base64,
+                        `data:${request.screenshot.mimeType};base64,` +
+                        request.screenshot.base64,
                     },
                   ]
                 : []),
@@ -78,8 +90,6 @@ export class OpenAIProvider
         ],
       });
 
-    return parseAnalysis(
-      response.output_text
-    );
+    return response.output_text;
   }
 }
