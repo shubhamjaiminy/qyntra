@@ -714,3 +714,75 @@ export function formatDecision(
 
   return lines.join('\n');
 }
+
+/**
+ * The decision as Markdown, for a CI job summary or PR comment. Same
+ * content as formatDecision, so the two can never disagree.
+ */
+export function formatDecisionMarkdown(
+  decision: ReleaseDecision,
+  application?: string
+): string {
+  const icon =
+    decision.verdict === 'UNSAFE'
+      ? '🔴'
+      : decision.verdict === 'SAFE'
+        ? '🟢'
+        : '🟡';
+
+  const { evidence } = decision;
+  const lines: string[] = [];
+
+  lines.push(
+    `## ${icon} Qyntra release decision: ${decision.verdict.replace(/_/g, ' ')}` +
+      (application ? ` — ${application}` : '')
+  );
+  lines.push('');
+  lines.push('| Quality score | Confidence | Pass rate | Tests | Risk |');
+  lines.push('| --- | --- | --- | --- | --- |');
+  lines.push(
+    `| ${decision.qualityScore}/100 | ${decision.decisionConfidence} | ` +
+      `${evidence.passRate}% | ${evidence.execution.passed}/` +
+      `${evidence.execution.total} passed | ${evidence.risk.level} ` +
+      `(${evidence.risk.score}/10) |`
+  );
+
+  const section = (title: string, items: string[]) => {
+    if (items.length === 0) {
+      return;
+    }
+
+    lines.push('');
+    lines.push(`### ${title}`);
+
+    for (const item of items) {
+      lines.push(`- ${item}`);
+    }
+  };
+
+  section('Blocking', decision.blockingReasons);
+  section('Warnings', decision.warnings);
+  section('Failure history', decision.failureHistory);
+
+  lines.push('');
+  lines.push('<details><summary>Score breakdown</summary>');
+  lines.push('');
+
+  for (const item of decision.scoreBreakdown) {
+    const sign = item.points >= 0 ? '+' : '';
+    lines.push(`- \`${sign}${item.points}\` ${item.reason}`);
+  }
+
+  lines.push('');
+  lines.push('</details>');
+
+  if (evidence.historyAvailable) {
+    lines.push('');
+    lines.push(
+      `_Compared to ${evidence.runsCompared} previous run` +
+        `${evidence.runsCompared === 1 ? '' : 's'}._`
+    );
+  }
+
+  return lines.join('\n') + '\n';
+}

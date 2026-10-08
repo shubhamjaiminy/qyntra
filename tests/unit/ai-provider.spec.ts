@@ -1,8 +1,17 @@
 import { test, expect } from '@playwright/test';
 
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+
 import { parseAnalysis } from '../../scripts/ai/prompt';
 import { isProviderOutage } from '../../scripts/ai/provider';
-import { resolveAIConfig } from '../../scripts/lib/config';
+import {
+  loadConfig,
+  resolveAIConfig,
+  stageAIConfig,
+  withAIEnvOverrides,
+} from '../../scripts/lib/config';
 
 const VALID = {
   category: 'Functional / Assertion',
@@ -122,5 +131,80 @@ test.describe('provider outage detection', () => {
     expect(
       isProviderOutage(new Error('Qyntra AI returned invalid JSON.'))
     ).toBe(false);
+  });
+});
+
+test.describe('ai config from file and environment', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qyntra-ai-'));
+
+  test.beforeAll(() => {
+    fs.mkdirSync(path.join(root, '.qyntra'));
+    fs.writeFileSync(
+      path.join(root, '.qyntra', 'config.json'),
+      JSON.stringify({
+        app: { baseUrl: 'https://example.com' },
+        requirements: ['x'],
+        ai: { provider: 'ollama', model: 'qwen2.5-coder:7b' },
+      })
+    );
+  });
+
+  test.afterEach(() => {
+    delete process.env.QYNTRA_AI_PROVIDER;
+    delete process.env.QYNTRA_AI_MODEL;
+  });
+
+  test('a provider set in the file does not inherit openai defaults', () => {
+    fs.writeFileSync(
+      path.join(root, 'gemini.json'),
+      JSON.stringify({
+        app: { baseUrl: 'https://example.com' },
+        requirements: ['x'],
+        ai: { provider: 'gemini' },
+      })
+    );
+
+    const ai = loadConfig({ rootDir: root, configPath: 'gemini.json' }).ai;
+
+    expect(ai.model).toBe('gemini-2.5-flash');
+    expect(ai.apiKeyEnv).toBe('GEMINI_API_KEY');
+  });
+
+  test('QYNTRA_AI_PROVIDER switches provider and drops the old model', () => {
+    process.env.QYNTRA_AI_PROVIDER = 'gemini';
+
+    const ai = loadConfig({ rootDir: root }).ai;
+
+    expect(ai.provider).toBe('gemini');
+    expect(ai.model).toBe('gemini-2.5-flash');
+  });
+
+  test('the CLI and the stages resolve the same provider', () => {
+    process.env.QYNTRA_AI_PROVIDER = 'none';
+
+    expect(loadConfig({ rootDir: root }).ai).toEqual(stageAIConfig(root));
+  });
+
+  test('naming the same provider keeps the file model', () => {
+    process.env.QYNTRA_AI_PROVIDER = 'ollama';
+
+    expect(loadConfig({ rootDir: root }).ai.model).toBe('qwen2.5-coder:7b');
+  });
+
+  test('QYNTRA_AI_MODEL overrides only the model', () => {
+    process.env.QYNTRA_AI_MODEL = 'llama3';
+
+    const ai = loadConfig({ rootDir: root }).ai;
+
+    expect(ai.provider).toBe('ollama');
+    expect(ai.model).toBe('llama3');
+  });
+
+  test('an unknown provider in the environment is rejected', () => {
+    process.env.QYNTRA_AI_PROVIDER = 'gpt';
+
+    expect(() => resolveAIConfig(withAIEnvOverrides({}))).toThrow(
+      /Unsupported "ai.provider"/
+    );
   });
 });

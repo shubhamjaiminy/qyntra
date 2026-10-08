@@ -51,6 +51,7 @@ import {
 import {
   decideRelease,
   formatDecision,
+  formatDecisionMarkdown,
   type AnalyzedFailure,
   type ReleaseDecision,
   type RiskLevel,
@@ -743,6 +744,24 @@ function commandGate(args: ParsedArgs): number {
   log.blank();
   log.info(`Decision artifact: ${paths.releaseDecision}`);
 
+  // GitHub Actions renders this file on the run page, so reviewers see
+  // the verdict and its reasons without downloading an artifact.
+  // Non-fatal: a summary that fails to write must not change the verdict.
+  const summaryFile = process.env.GITHUB_STEP_SUMMARY;
+
+  if (summaryFile) {
+    try {
+      fs.appendFileSync(
+        summaryFile,
+        formatDecisionMarkdown(decision, config.app.name)
+      );
+    } catch (error) {
+      log.warn(
+        `Could not write the job summary: ${(error as Error).message}`
+      );
+    }
+  }
+
   return decision.verdict === 'UNSAFE'
     ? EXIT_QUALITY_GATE_FAILED
     : EXIT_OK;
@@ -914,6 +933,8 @@ Options:
 Environment:
   QYNTRA_BASE_URL     Override app.baseUrl
   QYNTRA_OUTPUT_DIR   Override output.dir
+  QYNTRA_AI_PROVIDER  Override ai.provider (ollama | gemini | openai | none)
+  QYNTRA_AI_MODEL     Override ai.model
   QYNTRA_LOG_LEVEL    debug | info | warn | error
   QYNTRA_LOG_FORMAT   json for one JSON object per line
   QYNTRA_HEADED       1 to show the browser during login

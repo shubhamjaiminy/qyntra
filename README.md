@@ -338,7 +338,10 @@ jobs:
         env:
           QYNTRA_APP_USER: ${{ secrets.QYNTRA_APP_USER }}
           QYNTRA_APP_PASSWORD: ${{ secrets.QYNTRA_APP_PASSWORD }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Hosted runners have no Ollama: use Gemini's free tier in CI
+          # when the secret exists, the deterministic analyzer otherwise.
+          QYNTRA_AI_PROVIDER: ${{ secrets.GEMINI_API_KEY != '' && 'gemini' || 'none' }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -348,7 +351,14 @@ jobs:
 ```
 
 Qyntra exits non-zero when the release is blocked, so it works directly
-as a required status check.
+as a required status check. In GitHub Actions it also writes the verdict,
+blocking reasons, warnings and score breakdown to the job summary, so
+reviewers see *why* without downloading the report.
+
+`QYNTRA_AI_PROVIDER` and `QYNTRA_AI_MODEL` override the config's `ai`
+block per environment — typically Ollama on developer machines and
+Gemini or OpenAI in CI. Switching provider this way also resets the
+model, key and endpoint to the new provider's defaults.
 
 The cache step is not optional if you want the flakiness half of the
 gate. `qyntra-out/` is ephemeral in CI, so without it Qyntra starts from

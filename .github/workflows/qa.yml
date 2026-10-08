@@ -53,16 +53,24 @@ jobs:
       - name: Run Qyntra unit tests
         run: npm run test:unit
 
-      - name: Run Qyntra tests
+      - name: Run hand-written tests
         run: npm test
 
-      - name: Run Qyntra analyzer
-        if: always()
-        run: npm run qa:analyze
-
-      - name: Generate Qyntra dashboard
-        if: always()
-        run: npm run dashboard
+      # The product, run on itself: discover the app, generate and run
+      # tests, analyse failures, and decide. Exits 1 when the release is
+      # UNSAFE, which fails this check; the verdict and its reasons are
+      # written to the job summary on the run page.
+      #
+      # Hosted runners have no Ollama, so AI is chosen per environment:
+      # Gemini when the GEMINI_API_KEY secret exists, otherwise the
+      # deterministic analyzer (the decision then reports lower
+      # confidence rather than pretending AI was used).
+      - name: Qyntra release decision
+        if: ${{ !cancelled() }}
+        run: npm run qyntra -- run
+        env:
+          QYNTRA_AI_PROVIDER: ${{ secrets.GEMINI_API_KEY != '' && 'gemini' || 'none' }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
       - name: Upload Qyntra dashboard
         if: always()

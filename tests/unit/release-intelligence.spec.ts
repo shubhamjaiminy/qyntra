@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 
 import {
   decideRelease,
+  formatDecisionMarkdown,
   type AnalyzedFailure,
   type ReleaseInputs,
   type Severity,
@@ -490,5 +491,47 @@ test.describe('release decision with scenario coverage', () => {
 
     expect(decision.verdict).toBe('SAFE');
     expect(decision.decisionConfidence).toBe('High');
+  });
+});
+
+test.describe('markdown job summary', () => {
+  test('a blocked release leads with UNSAFE and lists every reason', () => {
+    const decision = decideRelease(
+      inputs({
+        execution: { total: 10, passed: 9, failed: 1, skipped: 0 },
+        failures: [failure('High')],
+      })
+    );
+
+    const markdown = formatDecisionMarkdown(decision, 'Acme Billing');
+
+    expect(markdown).toContain('🔴 Qyntra release decision: UNSAFE — Acme Billing');
+    expect(markdown).toContain('9/10 passed');
+
+    for (const reason of decision.blockingReasons) {
+      expect(markdown).toContain(`- ${reason}`);
+    }
+  });
+
+  test('a clean release is green and has no blocking section', () => {
+    const markdown = formatDecisionMarkdown(decideRelease(inputs()));
+
+    expect(markdown).toContain('🟢 Qyntra release decision: SAFE');
+    expect(markdown).not.toContain('### Blocking');
+  });
+
+  test('every score item appears, so the summary stays auditable', () => {
+    const decision = decideRelease(
+      inputs({
+        execution: { total: 10, passed: 8, failed: 2, skipped: 0 },
+        failures: [failure('High'), failure('Medium')],
+      })
+    );
+
+    const markdown = formatDecisionMarkdown(decision);
+
+    for (const item of decision.scoreBreakdown) {
+      expect(markdown).toContain(item.reason);
+    }
   });
 });

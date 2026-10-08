@@ -594,13 +594,16 @@ export function loadConfig(
     ? merged.execution
     : {};
 
-  const ai = isPlainObject(merged.ai) ? merged.ai : {};
-
   const gate = isPlainObject(merged.gate) ? merged.gate : {};
 
   const output = isPlainObject(merged.output) ? merged.output : {};
 
-  const resolvedAI = resolveAIConfig(ai);
+  // Resolved from the file, not `merged`: the merged copy carries the
+  // openai defaults, so `"provider": "gemini"` would inherit gpt-5-mini
+  // and OPENAI_API_KEY. resolveAIConfig fills per-provider defaults.
+  const resolvedAI = resolveAIConfig(
+    withAIEnvOverrides(fileConfig.ai)
+  );
 
   return {
     app: {
@@ -755,7 +758,34 @@ export function stageAIConfig(
     }
   }
 
-  return resolveAIConfig(raw);
+  return resolveAIConfig(withAIEnvOverrides(raw));
+}
+
+/**
+ * Apply QYNTRA_AI_PROVIDER / QYNTRA_AI_MODEL. Lets CI pick a provider
+ * per environment (no Ollama on hosted runners) without editing the
+ * committed config.
+ *
+ * Switching provider drops the file's model, key and endpoint: they
+ * belong to the provider being replaced, and sending an Ollama model
+ * name to Gemini would fail on every call.
+ */
+export function withAIEnvOverrides(raw: unknown): Record<string, unknown> {
+  let ai: Record<string, unknown> = isPlainObject(raw) ? { ...raw } : {};
+
+  const provider = process.env.QYNTRA_AI_PROVIDER?.trim();
+
+  if (provider && provider !== ai.provider) {
+    ai = { provider };
+  }
+
+  const model = process.env.QYNTRA_AI_MODEL?.trim();
+
+  if (model) {
+    ai.model = model;
+  }
+
+  return ai;
 }
 
 /**
