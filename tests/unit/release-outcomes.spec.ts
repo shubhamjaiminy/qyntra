@@ -194,6 +194,7 @@ test.describe('applying the track record', () => {
         allowLowSeverityFailures: true,
         blockOnProductDefect: true,
         blockOnNewRegression: true,
+        blockOnPerformanceRegression: false,
         historyRuns: 50,
       },
       aiAnalysisAvailable: true,

@@ -337,6 +337,51 @@ instead of the documented 404 — with no hand-written tests.
 
 ---
 
+## Performance
+
+Every run, Qyntra measures — and asks one question: *did this release
+make the application slower?*
+
+- **API latency.** For each read endpoint it tests (observed or from the
+  spec), one discarded warm-up request, then 10 sequential requests,
+  one at a time: p50, p95 and error rate.
+- **Page load.** Time to first byte, DOM ready, load and largest
+  contentful paint, read from the browser during discovery — no extra
+  page load.
+
+```
+Page load : TTFB 204ms  DOM ready 1677ms  load 1882ms  LCP 2104ms
+GET https://api.example/api/articles  p50 206ms  p95 278ms
+```
+
+The release decision compares each number with the **median of
+previous runs** in run history. A regression needs both: 50% slower
+*and* at least 250ms (500ms for page timings) worse, over at least 3
+previous runs. So a fast endpoint getting 40ms slower, or one noisy run
+in the baseline, never fires:
+
+```
+Warnings:
+  - GET https://api.example/api/orders is slower: p95 950ms against a baseline of 200ms over 3 runs.
+  - GET https://api.example/api/orders now fails 20% of requests; it failed none in 3 previous runs.
+```
+
+Regressions warn by default. Shared CI runners are noisy enough that
+blocking on performance should be a choice:
+
+```json
+"gate": { "blockOnPerformanceRegression": true }
+```
+
+**This is not a load test, on purpose.** A few sequential requests per
+endpoint is a load no production API notices; generating concurrent
+traffic from CI against your environment could take it down, and a
+load number means little without a dedicated, stable environment.
+`"performance": { "samples": 10, "maxEndpoints": 20 }` tunes the
+measurement (samples are capped at 50); `"enabled": false` turns it off.
+
+---
+
 ## Repairing broken tests
 
 When a failure is diagnosed as a **test defect**, Qyntra tries to fix the
@@ -712,9 +757,11 @@ Stated plainly, because you will find them anyway:
 - **API tests are read-only.** Contract tests come from GET traffic
   observed during discovery and from GET operations in your OpenAPI
   spec; writes are never called. Swagger 2.0 must be converted to
-  OpenAPI 3.x first, and external `$ref`s are not followed. Performance
-  testing is a response-time budget, not load testing; LLM-feature
-  testing is not implemented.
+  OpenAPI 3.x first, and external `$ref`s are not followed.
+- **No load testing.** Performance is tracked as a regression from a
+  light sequential measurement, not by generating load; capacity and
+  concurrency limits are out of scope. LLM-feature testing is not
+  implemented.
 - **The codebase is not an input.** Discovery is black-box. Risk is
   derived from the application surface, not from your diff.
 - **Repair needs an AI provider and fixes test defects only.** Without

@@ -65,6 +65,11 @@ import { loadOpenApi } from './lib/openapi-loader';
 import { PING_REQUEST } from './ai/provider';
 import { log, redact, stage } from './lib/logger';
 import {
+  applyPerformance,
+  detectRegressions,
+  type PerformanceSnapshot,
+} from './lib/performance';
+import {
   OUTCOME_RESULTS,
   OUTCOME_SEVERITIES,
   OUTCOME_WINDOW_DAYS,
@@ -779,6 +784,30 @@ function buildDecision(
     trackRecord(readOutcomes(paths.releaseOutcomes).outcomes, history.runs)
   );
 
+  // Performance against the median of previous runs. priorRuns, so a
+  // retried gate never compares this run with itself.
+  const performanceArtifact = readOptionalArtifact<PerformanceSnapshot>(paths.performance);
+
+  const performanceSnapshot: PerformanceSnapshot | undefined = performanceArtifact
+    ? {
+        endpoints: performanceArtifact.endpoints ?? [],
+        ...(performanceArtifact.page ? { page: performanceArtifact.page } : {}),
+      }
+    : undefined;
+
+  const gated = performanceSnapshot
+    ? applyPerformance(
+        decision,
+        detectRegressions(
+          performanceSnapshot,
+          priorRuns
+            .map((run) => run.performance)
+            .filter((entry): entry is PerformanceSnapshot => entry !== undefined)
+        ),
+        config.gate.blockOnPerformanceRegression
+      )
+    : decision;
+
   const remediationArtifact = readOptionalArtifact<{
     resultsGeneratedAt?: string;
     repairs?: { status?: string; reviewRequired?: boolean; applied?: boolean }[];
@@ -794,14 +823,14 @@ function buildDecision(
     const needsReview = verified.filter((repair) => repair.reviewRequired);
 
     if (verified.length > 0) {
-      decision.warnings.push(
+      gated.warnings.push(
         `${verified.length} failing test(s) have a verified repair ready ` +
           `(${paths.remediationDir}). Apply with: qyntra repair --apply`
       );
     }
 
     if (needsReview.length > 0) {
-      decision.warnings.push(
+      gated.warnings.push(
         `${needsReview.length} of those repair(s) change an expected value. ` +
           'Confirm the new value is correct behaviour before applying.'
       );
@@ -810,9 +839,9 @@ function buildDecision(
 
   // Record this run only after the verdict is decided, so the run being
   // judged is never part of its own baseline.
-  recordRun(config, paths, failuresArtifact, decision, risk, execution);
+  recordRun(config, paths, failuresArtifact, gated, risk, execution, performanceSnapshot);
 
-  return decision;
+  return gated;
 }
 
 /**
@@ -829,7 +858,8 @@ function recordRun(
   failuresArtifact: FailuresArtifact | undefined,
   decision: ReleaseDecision,
   risk: { level: string; score: number },
-  execution: { total: number; passed: number; failed: number; skipped: number }
+  execution: { total: number; passed: number; failed: number; skipped: number },
+  performance?: PerformanceSnapshot
 ): void {
   const outcomes: RunTestOutcome[] = (failuresArtifact?.tests ?? [])
     .filter((entry) => typeof entry.test === 'string')
@@ -856,6 +886,7 @@ function recordRun(
         qualityScore: decision.qualityScore,
         risk,
         tests: outcomes,
+        ...(performance ? { performance } : {}),
       },
       config.gate.historyRuns
     );
@@ -1117,6 +1148,11 @@ async function commandRun(args: ParsedArgs): Promise<number> {
   runStage('TEST INTELLIGENCE', 'scenario-mapper', [], config);
   runStage('TEST GENERATION', 'test-generator', [], config);
   runStage('API TEST GENERATION', 'api-test-generator', [], config);
+
+  // Before the test run, so test traffic never skews the measurement.
+  if (config.performance.enabled) {
+    runStage('PERFORMANCE', 'performance', [], config);
+  }
 
   stage('TEST EXECUTION');
 

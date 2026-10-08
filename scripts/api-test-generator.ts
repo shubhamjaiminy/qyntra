@@ -110,6 +110,18 @@ async function main(): Promise<void> {
       : {}),
     files: generation.specs.map((spec) => ({ file: spec.fileName, tests: spec.tests })),
     skipped,
+
+    // The endpoints chosen for testing, for the performance stage to
+    // measure — the same set, so the two can never disagree.
+    endpoints: calls
+      .filter((call) => call.method === 'GET' && call.status >= 200 && call.status < 300)
+      .map((call) => ({
+        method: call.method,
+        url: call.url,
+        template: call.template,
+        auth: call.auth,
+        ...(call.authHeader ? { authHeader: call.authHeader } : {}),
+      })),
   });
 
   console.log(`

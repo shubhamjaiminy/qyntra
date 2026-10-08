@@ -24,6 +24,7 @@ export interface ArtifactPaths {
   scenarioMapping: string;
   generationSummary: string;
   apiGeneration: string;
+  performance: string;
   failures: string;
   failureAnalysis: string;
   aiAnalysis: string;
@@ -78,6 +79,7 @@ export function artifactPaths(
     scenarioMapping: path.join(outputDir, 'scenario-mapping.json'),
     generationSummary: path.join(outputDir, 'generation-summary.json'),
     apiGeneration: path.join(outputDir, 'api-generation.json'),
+    performance: path.join(outputDir, 'performance.json'),
     failures: path.join(outputDir, 'failures.json'),
     failureAnalysis: path.join(outputDir, 'failure-analysis.json'),
     aiAnalysis: path.join(outputDir, 'ai-analysis.json'),

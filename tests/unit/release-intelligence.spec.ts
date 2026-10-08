@@ -17,6 +17,7 @@ const defaultGate: GateConfig = {
   allowLowSeverityFailures: true,
   blockOnProductDefect: true,
   blockOnNewRegression: true,
+  blockOnPerformanceRegression: false,
   historyRuns: 50,
 };
 

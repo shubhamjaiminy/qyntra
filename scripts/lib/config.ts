@@ -150,6 +150,13 @@ export interface GateConfig {
   blockOnNewRegression: boolean;
 
   /**
+   * Block when an endpoint or the page got markedly slower than its
+   * recent baseline. Off by default: shared CI runners are noisy, so
+   * performance blocks only when a team chooses it.
+   */
+  blockOnPerformanceRegression: boolean;
+
+  /**
    * Runs of history retained for flakiness analysis. Lower values react
    * faster to a test being fixed; higher values are better at spotting
    * rare flakes.
@@ -198,6 +205,17 @@ export interface ApiConfig {
   auth?: { header: string; env: string };
 }
 
+/** Light, sequential latency measurement — never a load test. */
+export interface PerformanceConfig {
+  enabled: boolean;
+
+  /** Measured requests per endpoint, after one discarded warm-up. */
+  samples: number;
+
+  /** Bound on endpoints measured per run. */
+  maxEndpoints: number;
+}
+
 export interface QyntraConfig {
   app: AppConfig;
   requirements: string[];
@@ -208,6 +226,7 @@ export interface QyntraConfig {
   gate: GateConfig;
   remediation: RemediationConfig;
   api: ApiConfig;
+  performance: PerformanceConfig;
 
   /** Absolute path of the loaded config file, if any. */
   readonly configPath?: string;
@@ -263,6 +282,7 @@ function defaults(rootDir: string): QyntraConfig {
       allowLowSeverityFailures: true,
       blockOnProductDefect: true,
       blockOnNewRegression: true,
+      blockOnPerformanceRegression: false,
       historyRuns: 50,
     },
 
@@ -274,6 +294,12 @@ function defaults(rootDir: string): QyntraConfig {
     api: {
       parameters: {},
       exclude: [],
+    },
+
+    performance: {
+      enabled: true,
+      samples: 10,
+      maxEndpoints: 20,
     },
 
     rootDir,
@@ -746,6 +772,10 @@ export function loadConfig(
         gate.blockOnNewRegression ?? true
       ),
 
+      blockOnPerformanceRegression: Boolean(
+        gate.blockOnPerformanceRegression ?? false
+      ),
+
       historyRuns: validateNumber(
         gate.historyRuns ?? 50,
         'gate.historyRuns',
@@ -757,6 +787,8 @@ export function loadConfig(
     remediation: resolveRemediationConfig(merged.remediation),
 
     api: resolveApiConfig(merged.api),
+
+    performance: resolvePerformanceConfig(merged.performance),
 
     configPath,
     rootDir,
@@ -834,6 +866,39 @@ export function stageApiConfig(rootDir: string = process.cwd()): ApiConfig {
   }
 
   return resolveApiConfig(raw);
+}
+
+export function resolvePerformanceConfig(raw: unknown): PerformanceConfig {
+  const performance = isPlainObject(raw) ? raw : {};
+
+  return {
+    enabled: performance.enabled !== false,
+    // Capped low on purpose: this is a measurement, not a load test.
+    samples: validateNumber(performance.samples ?? 10, 'performance.samples', 3, 50),
+    maxEndpoints: validateNumber(
+      performance.maxEndpoints ?? 20,
+      'performance.maxEndpoints',
+      1,
+      100
+    ),
+  };
+}
+
+/** Lenient stage-level read, like stageAIConfig(). */
+export function stagePerformanceConfig(rootDir: string = process.cwd()): PerformanceConfig {
+  const configPath = findConfigFile(rootDir);
+
+  let raw: unknown = {};
+
+  if (configPath !== undefined) {
+    try {
+      raw = JSON.parse(fs.readFileSync(configPath, 'utf-8'))?.performance ?? {};
+    } catch {
+      // `qyntra doctor` reports the malformed file precisely.
+    }
+  }
+
+  return resolvePerformanceConfig(raw);
 }
 
 export function resolveRemediationConfig(raw: unknown): RemediationConfig {

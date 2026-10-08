@@ -10,6 +10,7 @@ import {
   shapeOf,
   type ApiCall,
 } from './lib/api-observation';
+import type { PagePerformance } from './lib/performance';
 import { stagePaths } from './lib/paths';
 import { BROWSER_PROFILE } from './lib/auth';
 import {
@@ -75,6 +76,9 @@ interface ApplicationMap {
     /** Observed API calls with status, timing and response shape. */
     apiCalls: ApiCall[];
   };
+
+  /** Browser timing of discovery's page load, for regression tracking. */
+  pagePerformance?: PagePerformance;
 
   metadata: {
     forms: number;
@@ -1811,6 +1815,55 @@ async function main(): Promise<void> {
       // Some applications never become network idle.
     });
 
+  // The browser's own measurements of the load that just happened:
+  // free, and the same method every run, which is what a trend needs.
+  const pageTiming = await page
+    .evaluate(
+      () =>
+        new Promise<Record<string, number | undefined>>((resolve) => {
+          const nav = performance.getEntriesByType('navigation')[0] as
+            | PerformanceNavigationTiming
+            | undefined;
+
+          let lcp: number | undefined;
+
+          try {
+            new PerformanceObserver((list) => {
+              const entries = list.getEntries();
+
+              if (entries.length > 0) {
+                lcp = entries[entries.length - 1].startTime;
+              }
+            }).observe({ type: 'largest-contentful-paint', buffered: true });
+          } catch {
+            // Not every browser exposes LCP.
+          }
+
+          setTimeout(
+            () =>
+              resolve({
+                ttfbMs: nav ? nav.responseStart - nav.requestStart : undefined,
+                domContentLoadedMs: nav ? nav.domContentLoadedEventEnd : undefined,
+                loadMs: nav && nav.loadEventEnd > 0 ? nav.loadEventEnd : undefined,
+                lcpMs: lcp,
+              }),
+            100
+          );
+        })
+    )
+    .catch(() => undefined);
+
+  const pagePerformance: PagePerformance | undefined = pageTiming
+    ? {
+        url,
+        ...Object.fromEntries(
+          Object.entries(pageTiming)
+            .filter(([, value]) => typeof value === 'number' && value >= 0)
+            .map(([name, value]) => [name, Math.round(value as number)])
+        ),
+      }
+    : undefined;
+
   const title =
     await page.title();
 
@@ -2104,6 +2157,8 @@ async function main(): Promise<void> {
         actions:
           dynamicActions,
       },
+
+      ...(pagePerformance ? { pagePerformance } : {}),
 
       network: {
         requests:

@@ -29,6 +29,7 @@ import fs from 'fs';
 import { execFileSync } from 'child_process';
 
 import { readOptionalArtifact, writeArtifact } from './paths';
+import type { PerformanceSnapshot } from './performance';
 
 // --------------------------------------------------
 // STORED SHAPE
@@ -74,6 +75,9 @@ export interface RunHistoryEntry {
   };
 
   tests: RunTestOutcome[];
+
+  /** Latency and page timing, the baseline for regression detection. */
+  performance?: PerformanceSnapshot;
 }
 
 export interface RunHistory {
