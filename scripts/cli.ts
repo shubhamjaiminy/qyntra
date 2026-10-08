@@ -59,6 +59,7 @@ import {
 } from './lib/release-intelligence';
 
 import { checkOllama } from './ai/ollama-provider';
+import { resolveAIConfig } from './lib/config';
 import { createProvider, describeProvider } from './ai/create-provider';
 import { planFromOpenApi } from './lib/openapi';
 import { loadOpenApi } from './lib/openapi-loader';
@@ -342,7 +343,55 @@ const STARTER_CONFIG = {
   },
 };
 
-function commandInit(args: ParsedArgs): number {
+/**
+ * The free AI that will actually work here: a running Ollama first
+ * (local, nothing leaves the machine), then Gemini's free tier when a
+ * key is set, else the deterministic analyzer. Never a paid provider by
+ * default — a starter config should not fail on a missing credit card.
+ */
+async function detectAIProvider(): Promise<{ ai: Record<string, unknown>; why: string }> {
+  const ollama = resolveAIConfig({ provider: 'ollama' });
+
+  if ((await checkOllama(ollama)) === null) {
+    return { ai: { provider: 'ollama', model: ollama.model }, why: `Ollama is running with ${ollama.model}` };
+  }
+
+  if (process.env.GEMINI_API_KEY) {
+    return { ai: { provider: 'gemini' }, why: 'GEMINI_API_KEY is set (Gemini free tier)' };
+  }
+
+  return {
+    ai: { provider: 'none' },
+    why:
+      'no free AI found — using the deterministic analyzer. For AI analysis, run Ollama ' +
+      '(ollama serve; ollama pull qwen2.5-coder:7b) or set GEMINI_API_KEY, then re-run init --force',
+  };
+}
+
+/**
+ * Keep Qyntra's own files out of git. .qyntra/.auth/ holds the saved
+ * login session — a credential — so this is done for the team rather
+ * than left to a line in the README. Existing entries are respected;
+ * nothing else in the file is touched.
+ */
+function ensureGitignore(rootDir: string): string[] {
+  const file = path.join(rootDir, '.gitignore');
+  const current = fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : '';
+  const lines = new Set(current.split(/\r?\n/).map((line) => line.trim()));
+
+  const wanted = ['.qyntra/.auth/', 'qyntra-out/'].filter(
+    (entry) => !lines.has(entry) && !lines.has(entry.replace(/\/$/, ''))
+  );
+
+  if (wanted.length > 0) {
+    const prefix = current === '' || current.endsWith('\n') ? '' : '\n';
+    fs.appendFileSync(file, `${prefix}\n# Qyntra: session credential and run output\n${wanted.join('\n')}\n`);
+  }
+
+  return wanted;
+}
+
+async function commandInit(args: ParsedArgs): Promise<number> {
   const rootDir = process.cwd();
   const target = path.join(rootDir, '.qyntra', 'config.json');
 
@@ -354,18 +403,30 @@ function commandInit(args: ParsedArgs): number {
 
   fs.mkdirSync(path.dirname(target), { recursive: true });
 
+  const detected = await detectAIProvider();
+
   fs.writeFileSync(
     target,
-    JSON.stringify(STARTER_CONFIG, null, 2) + '\n'
+    JSON.stringify({ ...STARTER_CONFIG, ai: detected.ai }, null, 2) + '\n'
   );
 
   log.info(`Created ${target}`);
+  log.info(`AI provider: ${String(detected.ai.provider)} — ${detected.why}`);
+
+  const ignored = ensureGitignore(rootDir);
+
+  if (ignored.length > 0) {
+    log.info(`Added to .gitignore: ${ignored.join(', ')}`);
+  }
   log.blank();
   log.info('Next steps:');
   log.info('  1. Set app.baseUrl to your staging environment.');
   log.info('  2. List the requirements you want covered.');
-  log.info('  3. Export any credentials named in app.auth.');
+  log.info('  3. Remove app.auth if the app needs no login; otherwise export its credentials.');
   log.info('  4. Run: npx qyntra doctor');
+  log.blank();
+  log.info('Optional: execution.include (your own test suites), api.openapi, llm.features —');
+  log.info('see the README for each.');
 
   return EXIT_OK;
 }
@@ -529,6 +590,43 @@ async function commandDoctor(args: ParsedArgs): Promise<number> {
       }
     } catch (error: any) {
       problems.push(`api.openapi: ${error?.message ?? error}`);
+    }
+  }
+
+  // AI-feature testing: an unusable judge would quietly skip every
+  // rubric check, so prove it answers now.
+  if (config.llm.features.length > 0) {
+    const judge = config.llm.judge;
+
+    log.info(
+      `AI features   : ${config.llm.features.length} configured ` +
+        `(${config.llm.features.map((feature) => feature.name).join(', ')})`
+    );
+
+    if (!judge) {
+      log.warn('No judge model: rubric checks are not generated. Set llm.judge (ollama or gemini).');
+    } else {
+      const problem =
+        judge.provider === 'ollama'
+          ? await checkOllama({ provider: 'ollama', model: judge.model, apiKeyEnv: '', baseUrl: judge.baseUrl })
+          : process.env[judge.apiKeyEnv ?? 'GEMINI_API_KEY']
+            ? await pingProvider({
+                ...config,
+                ai: { provider: 'gemini', model: judge.model, apiKeyEnv: judge.apiKeyEnv ?? 'GEMINI_API_KEY' },
+              })
+            : `${judge.apiKeyEnv ?? 'GEMINI_API_KEY'} is not set`;
+
+      if (problem === null) {
+        log.info(`Judge         : ${judge.provider} (${judge.model}) answered`);
+      } else {
+        log.warn(`Judge ${judge.provider} (${judge.model}) is not usable: ${problem} — rubric checks will be skipped.`);
+      }
+    }
+
+    for (const feature of config.llm.features) {
+      if (feature.auth && !process.env[feature.auth.env]) {
+        problems.push(`${feature.auth.env} is not set (required by llm feature "${feature.name}").`);
+      }
     }
   }
 
@@ -977,6 +1075,10 @@ function analyzeAndPrintChange(config: QyntraConfig, paths: ArtifactPaths): Chan
     ? analyzeChange(config.rootDir, {
         explicit: config.change.base,
         runs: readHistory(paths.runHistory).runs,
+        ignore: [
+          path.relative(config.rootDir, paths.outputDir).split(path.sep).join('/'),
+          path.relative(config.rootDir, paths.generatedTests).split(path.sep).join('/'),
+        ],
       })
     : { available: false, reason: 'Disabled (change.enabled = false).' };
 
@@ -1262,6 +1364,8 @@ async function commandRun(args: ParsedArgs): Promise<number> {
       require.resolve('@playwright/test/cli'),
       'test',
       `${generatedFilter}/`,
+      // The team's own suites, when they chose to gate on them.
+      ...config.execution.include,
       '--pass-with-no-tests',
       '--reporter=list,json',
     ],

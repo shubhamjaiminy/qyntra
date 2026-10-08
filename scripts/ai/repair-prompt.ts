@@ -25,7 +25,9 @@ Typical repairs:
 - A locator that no longer matches: replace
   it with one built from an element listed in
   evidence.domElements (the real page at
-  failure) or evidence.pageSnapshot. Prefer,
+  failure) or evidence.pageSnapshot. Each
+  domElements entry starts with a valid CSS
+  selector for that element, before " text". Prefer,
   in order: getByTestId (for a
   [data-testid] attribute), getByRole with a
   name, getByLabel, getByPlaceholder. Do not

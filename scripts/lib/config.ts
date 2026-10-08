@@ -69,6 +69,14 @@ export interface ExecutionConfig {
 
   /** Playwright JSON reporter output. */
   resultsFile: string;
+
+  /**
+   * The team's own test folders or files to run and gate on alongside
+   * the generated ones, e.g. ["tests/e2e"]. Empty by default: only
+   * tests generated for this application are evidence about it unless
+   * the team says otherwise. Included tests are also what repair fixes.
+   */
+  include: string[];
 }
 
 export type AIProviderName = 'openai' | 'gemini' | 'ollama' | 'none';
@@ -300,6 +308,7 @@ function defaults(rootDir: string): QyntraConfig {
     execution: {
       generatedDir: 'tests/generated',
       resultsFile: 'test-results/results.json',
+      include: [],
     },
 
     ai: {
@@ -776,6 +785,18 @@ export function loadConfig(
       resultsFile: String(
         execution.resultsFile ?? 'test-results/results.json'
       ),
+
+      include: (Array.isArray(execution.include) ? execution.include : []).map((entry, index) => {
+        const value = assertNonEmptyString(entry, `execution.include[${index}]`, 'A test folder or file, e.g. "tests/e2e".');
+
+        // Relative to the repository, and inside it: a path outside is a
+        // mistake (or a different project), never a test suite to gate on.
+        if (path.isAbsolute(value) || value.split(/[\\/]/).includes('..')) {
+          throw new ConfigError(`execution.include[${index}] must be a path inside the repository: ${value}`);
+        }
+
+        return value.replace(/\\/g, '/').replace(/\/+$/, '');
+      }),
     },
 
     ai: resolvedAI,

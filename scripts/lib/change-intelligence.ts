@@ -97,6 +97,21 @@ const SENSITIVE: [SensitiveArea, RegExp][] = [
   ['security', /security|crypto|encrypt|csrf|cors|sanitiz|xss|secret/i],
 ];
 
+/**
+ * Paths that are not the team's source: build output, dependencies
+ * checked in, minified or generated files, and Qyntra's own output.
+ * Counting them would rate a rebuilt bundle as a large risky change.
+ */
+const NOT_SOURCE =
+  /(^|\/)(dist|build|out|coverage|\.next|\.nuxt|\.svelte-kit|vendor|node_modules|bower_components|__snapshots__|qyntra-out[^/]*|\.qyntra|playwright-report|test-results)\/|\.(min\.(js|css)|map|snap|lock)$|(^|\/)generated[^/]*\//i;
+
+export function isIgnoredPath(filePath: string, extraDirs: string[] = []): boolean {
+  return (
+    NOT_SOURCE.test(filePath) ||
+    extraDirs.some((dir) => dir && (filePath === dir || filePath.startsWith(`${dir.replace(/\/+$/, '')}/`)))
+  );
+}
+
 export function classifyFile(filePath: string): { kind: FileKind; sensitive: SensitiveArea[] } {
   const kind: FileKind = TEST_PATH.test(filePath)
     ? 'test'
@@ -432,9 +447,13 @@ export function resolveBase(
 
   const parent = git(rootDir, ['rev-parse', '--verify', '--quiet', `${head}~1`]);
 
-  return parent
-    ? { base: parent, reason: 'previous commit' }
-    : { reason: 'No earlier commit in this clone (a shallow CI checkout?). Use fetch-depth: 0.' };
+  if (parent) {
+    return { base: parent, reason: 'previous commit' };
+  }
+
+  return git(rootDir, ['rev-parse', '--is-shallow-repository']) === 'true'
+    ? { reason: 'This is a shallow clone with no earlier commit. In CI, check out with fetch-depth: 0.' }
+    : { reason: "This is the repository's first commit; there is no earlier change to compare." };
 }
 
 /**
@@ -443,7 +462,13 @@ export function resolveBase(
  */
 export function analyzeChange(
   rootDir: string,
-  options: { explicit?: string; runs?: RunHistoryEntry[]; env?: NodeJS.ProcessEnv } = {}
+  options: {
+    explicit?: string;
+    runs?: RunHistoryEntry[];
+    env?: NodeJS.ProcessEnv;
+    /** More directories that are not source, e.g. the output dir. */
+    ignore?: string[];
+  } = {}
 ): ChangeAnalysis {
   if (!fs.existsSync(path.join(rootDir, '.git')) && git(rootDir, ['rev-parse', '--git-dir']) === undefined) {
     return { available: false, reason: 'Not a git repository.' };
@@ -480,7 +505,9 @@ export function analyzeChange(
         added: Number(added) || 0,
         removed: Number(removed) || 0,
       };
-    });
+    })
+    // Lockfiles are dependency changes, not noise: keep them.
+    .filter((entry) => DEPENDENCY_FILE.test(entry.path) || !isIgnoredPath(entry.path, options.ignore));
 
   const routesByFile = new Map<string, string[]>();
   const sourceFiles = numstat.filter((entry) => classifyFile(entry.path).kind === 'source').slice(0, 200);

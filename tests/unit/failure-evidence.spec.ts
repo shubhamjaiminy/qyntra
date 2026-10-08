@@ -250,9 +250,23 @@ test.describe('dom at failure', () => {
   test('resolves incremental snapshot references to real elements', () => {
     const elements = collectEvidence(attachments()).domElements ?? [];
 
-    expect(elements).toContain('span.todo-count [data-testid="todo-count"] "1 item left"');
-    expect(elements).toContain('li [data-testid="todo-item"] "buy milk"');
-    expect(elements).toContain('button [aria-label="Delete"]');
+    expect(elements).toContain('span.todo-count[data-testid="todo-count"] text "1 item left"');
+    expect(elements).toContain('li[data-testid="todo-item"] text "buy milk"');
+    expect(elements).toContain('button[aria-label="Delete"]');
+  });
+
+  test('each entry starts with a valid CSS selector for that element', async ({ page }) => {
+    await page.setContent('<footer><span class="todo-count" data-testid="todo-count"><strong>1</strong> item left</span></footer>');
+
+    for (const line of collectEvidence(attachments()).domElements ?? []) {
+      const selector = line.split(' text "')[0];
+
+      // Valid CSS: querySelector throws on a syntax error.
+      await expect(page.evaluate((css) => { document.querySelector(css); return true; }, selector)).resolves.toBe(true);
+      expect(selector).not.toContain(' ');
+    }
+
+    expect(await page.locator('span.todo-count[data-testid="todo-count"]').count()).toBe(1);
   });
 
   test('scripts are never included', () => {

@@ -12,6 +12,7 @@ import {
   classifyFile,
   coverageGaps,
   findTestFiles,
+  isIgnoredPath,
   routesIn,
   terms,
   type ChangeSummary,
@@ -90,6 +91,32 @@ test.describe('classification', () => {
       '/checkout/confirm',
       '/api/orders',
     ]);
+  });
+});
+
+test.describe('what is not source', () => {
+  test('build output, vendored, minified, generated and Qyntra files are ignored', () => {
+    for (const file of [
+      'dist/app.js', 'build/index.html', 'vendor/lib.js', 'public/app.min.js', 'src/app.js.map',
+      'qyntra-out/index.html', '.qyntra/config.json', 'coverage/lcov.info', 'src/__snapshots__/a.snap',
+    ]) {
+      expect(isIgnoredPath(file), file).toBe(true);
+    }
+
+    expect(isIgnoredPath('src/checkout/pay.ts')).toBe(false);
+    expect(isIgnoredPath('reports/out.html', ['reports'])).toBe(true);
+  });
+
+  test('a committed dashboard is not counted as application code', () => {
+    const dir = repo();
+
+    write(dir, 'qyntra-out/index.html', '<html>\n'.repeat(1500));
+    write(dir, 'src/features/todos/TodoList.tsx', '// small change\n');
+    commit(dir, 'with output');
+
+    const change = analyzeChange(dir, { env: noEnv }) as ChangeSummary;
+
+    expect(change.files.map((file) => file.path)).toEqual(['src/features/todos/TodoList.tsx']);
   });
 });
 
@@ -175,6 +202,12 @@ test.describe('analysing a real repository', () => {
 
     expect(change.available).toBe(false);
     expect(!change.available && change.reason).toMatch(/fetch-depth: 0/);
+  });
+
+  test("a repository's first commit is told apart from a shallow clone", () => {
+    const change = analyzeChange(repo(), { env: noEnv });
+
+    expect(!change.available && change.reason).toMatch(/first commit/);
   });
 
   test('outside a git repository the analysis is unavailable, not an error', () => {

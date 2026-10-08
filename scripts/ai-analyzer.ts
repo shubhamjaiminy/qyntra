@@ -13,6 +13,7 @@ import {
   createProvider,
   describeProvider,
 } from './ai/create-provider';
+import { reconcileWithEvidence } from './lib/attribution';
 import { stageAIConfig } from './lib/config';
 import type { FailureEvidence } from './lib/failure-evidence';
 import { stagePaths } from './lib/paths';
@@ -836,7 +837,10 @@ async function main(): Promise<void> {
     }
 
     analyses.push(
-      analysis
+      reconcileWithEvidence(
+        analysis,
+        failure
+      )
     );
   }
 

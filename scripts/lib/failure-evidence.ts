@@ -498,8 +498,11 @@ function collectDomElements(events: any[], evidence: FailureEvidence): void {
 
 /**
  * One line per addressable element, e.g.
- *   span.todo-count [data-testid="todo-count"] "1 item left"
- * Null for anonymous wrappers with neither attributes nor text.
+ *   span.todo-count[data-testid="todo-count"] text "1 item left"
+ * The part before " text" is a valid CSS selector for that element — no
+ * spaces, which in CSS mean "a descendant of" — because a repair model
+ * copies it verbatim. Null for anonymous wrappers with neither
+ * attributes nor text.
  */
 function describeElement(
   tag: string,
@@ -519,10 +522,11 @@ function describeElement(
     (attr) => attrs[attr] !== undefined && attrs[attr] !== ''
   ).map((attr) => {
     const value = attr === 'href' ? sanitizeUrl(attrs[attr]) : attrs[attr];
-    return `[${attr}="${clean(value).slice(0, 80)}"]`;
+    return `[${attr}="${clean(value).slice(0, 80).replace(/["\\]/g, '\\$&')}"]`;
   });
 
-  const shownText = text ? ` "${clean(text).slice(0, 60)}"` : '';
+  // Inner double quotes would end the quoted text early for readers.
+  const shownText = text ? ` text "${clean(text).slice(0, 60).replace(/"/g, "'")}"` : '';
 
   if (parts.length === 0 && !classes && !shownText) {
     return null;
@@ -533,7 +537,7 @@ function describeElement(
     return null;
   }
 
-  return `${name}${classes}${parts.length ? ' ' + parts.join(' ') : ''}${shownText}`;
+  return `${name}${classes}${parts.join('')}${shownText}`;
 }
 
 /**

@@ -25,6 +25,26 @@ npx qyntra run       # full pipeline, ends with a release decision
 misconfigurations that otherwise surface as a confusing mid-pipeline
 failure.
 
+`init` picks a free AI that works on your machine — a running Ollama,
+else Gemini's free tier when `GEMINI_API_KEY` is set, else the
+deterministic analyzer — never a paid provider. It also adds
+`.qyntra/.auth/` (your saved login session, a credential) and
+`qyntra-out/` to `.gitignore`.
+
+### Your own tests
+
+`qyntra run` gates on the tests it generates for your application. To
+gate on your own Playwright suites too — and let Qyntra diagnose and
+repair them — list them:
+
+```json
+"execution": { "include": ["tests/e2e", "tests/checkout.spec.ts"] }
+```
+
+Paths are relative to the repository and must stay inside it. Only
+generated tests are run by default, so an unrelated suite passing can
+never make an untested application look safe.
+
 ---
 
 ## Configuration
