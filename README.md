@@ -367,6 +367,32 @@ deterministic way each question allows:
 replaced by the test input. `responsePath` is where the answer text is
 in the JSON response.
 
+**No API to call? Test the chat widget itself** — through a real
+browser, as your users meet it:
+
+```json
+{
+  "name": "Help chat",
+  "type": "ui",
+  "ui": {
+    "url": "https://staging.acme.example/help",
+    "inputSelector": "#chat-input",
+    "submitSelector": "button[type=submit]",
+    "responseSelector": ".message.assistant"
+  },
+  "canaries": ["CANARY-7f3a"]
+}
+```
+
+Qyntra types the input, sends it (Enter when there is no
+`submitSelector`), and reads the newest `responseSelector` match once
+its text has stopped changing for `settleMs` (default 1500) — so a
+streamed reply is graded whole, not half-written. The same cases,
+probes, canaries and judge apply. In a browser there is no HTTP status,
+so an uncaught page error while answering counts as a crash, and a Send
+button the widget disables (for empty input, say) counts as handled.
+Generated UI tests reuse the saved login session.
+
 **Your cases** check `contains`, `notContains`, `matches` (a regex), a
 latency budget, and optionally a `rubric` graded by a judge model.
 
@@ -893,11 +919,10 @@ Stated plainly, because you will find them anyway:
 - **No load testing.** Performance is tracked as a regression from a
   light sequential measurement, not by generating load; capacity and
   concurrency limits are out of scope.
-- **AI-feature tests are API-level.** LLM features are tested through
-  the endpoint that serves them, not by typing into a chat widget in
-  the browser. Rubric grading is only as good as the judge: small local
-  models fail it often, which Qyntra detects and reports rather than
-  trusting.
+- **AI-feature judging is only as good as the judge.** Small local
+  models fail rubric grading often, which Qyntra detects and reports
+  rather than trusting. Chat-UI tests read text replies; widgets that
+  answer with images, cards or voice are not covered.
 - **Change analysis reads paths, not semantics.** Risk from the diff
   comes from file paths, line counts and route strings — it knows a
   payment file changed, not what the change does. Coverage gaps are

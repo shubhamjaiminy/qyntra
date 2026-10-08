@@ -934,12 +934,45 @@ export function resolveLlmConfig(raw: unknown, ai: AIConfig): LlmConfig {
     const feature = isPlainObject(entry) ? entry : {};
 
     const name = assertNonEmptyString(feature.name, `${at}.name`, 'A label, e.g. "Support bot".');
-    const endpoint = validateUrl(
-      assertNonEmptyString(feature.endpoint, `${at}.endpoint`, 'The URL the AI feature is served at.'),
-      `${at}.endpoint`
-    );
+    const isUi = feature.type === 'ui';
 
-    if (!JSON.stringify(feature.body ?? '').includes('{{input}}')) {
+    if (feature.type !== undefined && feature.type !== 'api' && !isUi) {
+      throw new ConfigError(`${at}.type must be "api" or "ui".`);
+    }
+
+    let ui: LlmFeature['ui'];
+
+    if (isUi) {
+      const block = isPlainObject(feature.ui) ? feature.ui : {};
+
+      ui = {
+        url: validateUrl(
+          assertNonEmptyString(block.url, `${at}.ui.url`, 'The page the chat widget is on.'),
+          `${at}.ui.url`
+        ),
+        inputSelector: assertNonEmptyString(block.inputSelector, `${at}.ui.inputSelector`, 'Where the user types, e.g. "#chat-input".'),
+        ...(block.submitSelector !== undefined
+          ? { submitSelector: assertNonEmptyString(block.submitSelector, `${at}.ui.submitSelector`) }
+          : {}),
+        responseSelector: assertNonEmptyString(
+          block.responseSelector,
+          `${at}.ui.responseSelector`,
+          'Matches each assistant reply (not the user\'s messages), e.g. ".message.bot".'
+        ),
+        ...(block.settleMs !== undefined
+          ? { settleMs: validateNumber(block.settleMs, `${at}.ui.settleMs`, 250, 30_000) }
+          : {}),
+      };
+    }
+
+    const endpoint = isUi
+      ? ui!.url
+      : validateUrl(
+          assertNonEmptyString(feature.endpoint, `${at}.endpoint`, 'The URL the AI feature is served at.'),
+          `${at}.endpoint`
+        );
+
+    if (!isUi && !JSON.stringify(feature.body ?? '').includes('{{input}}')) {
       throw new ConfigError(
         `${at}.body must contain "{{input}}" where the test input goes.`,
         'Example: "body": { "message": "{{input}}" }'
@@ -1028,6 +1061,7 @@ export function resolveLlmConfig(raw: unknown, ai: AIConfig): LlmConfig {
       maxLatencyMs: validateNumber(feature.maxLatencyMs ?? 30_000, `${at}.maxLatencyMs`, 100, 600_000),
       probes,
       cases,
+      ...(ui ? { ui } : {}),
     };
   });
 

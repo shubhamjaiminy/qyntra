@@ -142,3 +142,46 @@ test.describe('llm spec generation', () => {
     expect(spec.source).toContain('"content": "Q: {{input}}"');
   });
 });
+
+test.describe('chat-widget features', () => {
+  const ui = (overrides: Record<string, unknown> = {}) =>
+    resolveLlmConfig(
+      {
+        features: [
+          {
+            name: 'Support chat',
+            type: 'ui',
+            ui: { url: 'https://app.example/help', inputSelector: '#q', submitSelector: '#send', responseSelector: '.bot', ...overrides },
+            canaries: ['CANARY-1'],
+            cases: [{ name: 'greets', input: 'hi', expect: { contains: ['Hello'] } }],
+          },
+        ],
+      },
+      ai
+    );
+
+  test('needs no endpoint or body, but every selector', () => {
+    expect(ui().features[0].ui).toMatchObject({ url: 'https://app.example/help', responseSelector: '.bot' });
+    expect(() => ui({ responseSelector: undefined })).toThrow(/ui\.responseSelector/);
+  });
+
+  test('generates browser tests on the page fixture with the same checks', () => {
+    const config = ui({ settleMs: 3000 });
+    const [spec] = generateLlmSpecs(config.features, config.judge);
+
+    expect(spec.source).toContain('async ({ page })');
+    expect(spec.source).toContain('await ask(page, input)');
+    expect(spec.source).not.toContain('async ({ request })');
+    expect(spec.source).toContain('const RESPONSE_SELECTOR = ".bot"');
+    expect(spec.source).toContain('const SETTLE_MS = 3000');
+    expect(spec.source).toContain("page.on('pageerror'");
+    expect(spec.tests).toContain('Support chat: probe role-escape');
+  });
+
+  test('an unknown feature type is rejected', () => {
+    expect(() =>
+      resolveLlmConfig({ features: [{ name: 'x', type: 'voice', ui: {} }] }, ai)
+    ).toThrow(/"api" or "ui"/);
+  });
+});
+
