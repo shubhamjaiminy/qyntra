@@ -1,6 +1,19 @@
 import fs from 'fs';
+import path from 'path';
 
 import type { FailureEvidence } from './lib/failure-evidence';
+import { coverageGaps, findTestFiles, type ChangeAnalysis } from './lib/change-intelligence';
+import {
+  renderApiSection,
+  renderChangeSection,
+  renderLlmSection,
+  renderPerformanceSection,
+  renderTrackRecordSection,
+  type TestStatus,
+} from './lib/dashboard-sections';
+import type { PerformanceSnapshot } from './lib/performance';
+import { readOutcomes, trackRecord } from './lib/release-outcomes';
+import { readHistory } from './lib/run-history';
 import { stagePaths } from './lib/paths';
 
 type Result = {
@@ -68,6 +81,7 @@ type FailureReport = {
     durationSeconds?: string;
   };
   failures?: unknown[];
+  tests?: { test?: string; status?: string }[];
 };
 
 type GateDecision = {
@@ -514,6 +528,54 @@ const repairs: RepairRecord[] =
   remediationReport.resultsGeneratedAt === failureReport?.generatedAt
     ? remediationReport.repairs ?? []
     : [];
+
+// --------------------------------------------------
+// INTELLIGENCE SECTIONS
+// --------------------------------------------------
+
+const sectionPaths = stagePaths();
+
+const statusByTest = new Map<string, TestStatus>(
+  (failureReport?.tests ?? [])
+    .filter((entry) => typeof entry.test === 'string')
+    .map((entry) => [String(entry.test), entry.status as TestStatus])
+);
+
+const statusOf = (test: string) => statusByTest.get(test);
+
+const changeArtifact = readJson<ChangeAnalysis>(sectionPaths.changeAnalysis) ?? undefined;
+
+const changeSection = renderChangeSection(
+  changeArtifact,
+  changeArtifact?.available
+    ? coverageGaps(changeArtifact, [...statusByTest.keys(), ...findTestFiles(process.cwd())])
+    : []
+);
+
+// The dashboard renders before the gate records this run, so every run
+// in history is a previous run.
+const historyRuns = readHistory(sectionPaths.runHistory).runs;
+
+const performanceArtifact = readJson<PerformanceSnapshot>(sectionPaths.performance) ?? undefined;
+
+const performanceSection = renderPerformanceSection(
+  performanceArtifact
+    ? { endpoints: performanceArtifact.endpoints ?? [], ...(performanceArtifact.page ? { page: performanceArtifact.page } : {}) }
+    : undefined,
+  historyRuns
+    .map((run) => run.performance)
+    .filter((entry): entry is PerformanceSnapshot => entry !== undefined)
+);
+
+const apiSection = renderApiSection(readJson<any>(sectionPaths.apiGeneration) ?? undefined, statusOf);
+
+const llmSection = renderLlmSection(
+  readJson<any>(path.join(sectionPaths.outputDir, 'llm-generation.json')) ?? undefined,
+  statusOf
+);
+
+const outcomes = readOutcomes(sectionPaths.releaseOutcomes).outcomes;
+const trackRecordSection = renderTrackRecordSection(outcomes, trackRecord(outcomes, historyRuns));
 
 const riskReport =
   readJson<RiskReport>(
@@ -1796,6 +1858,27 @@ body {
   grid-column: 1 / -1;
 }
 
+.section > details {
+  padding: 12px 24px 20px;
+
+  font-size: 13px;
+
+  color: #475467;
+}
+
+.section > details > summary {
+  cursor: pointer;
+
+  font-weight: 600;
+
+  margin-bottom: 8px;
+}
+
+.section > p,
+.section > ul {
+  padding: 0 24px;
+}
+
 .evidence-group + .evidence-group {
   margin-top: 12px;
 }
@@ -2274,6 +2357,16 @@ td {
   <!-- AI -->
 
   ${aiSection}
+
+  ${changeSection}
+
+  ${apiSection}
+
+  ${llmSection}
+
+  ${performanceSection}
+
+  ${trackRecordSection}
 
 
   <!-- TEST RESULTS -->

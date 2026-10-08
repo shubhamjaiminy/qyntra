@@ -701,6 +701,14 @@ Score breakdown:
 
 Written to `qyntra-out/release-decision.json` for your own tooling.
 
+The dashboard (`qyntra-out/index.html`, self-contained — screenshots are
+embedded, so it survives being downloaded from CI) shows each layer on
+its own: failures with browser evidence and verified repairs, what
+changed and which changed areas no test mentions, API and AI-feature
+results with the reasons anything was not tested, performance against
+baseline, and the gate's track record. Sections with nothing to show are
+left out.
+
 ### Was this always broken, or did we break it?
 
 The first question anyone asks a gate. Qyntra keeps the last
