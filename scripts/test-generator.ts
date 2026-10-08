@@ -2,6 +2,10 @@ import fs from 'fs';
 import path from 'path';
 
 import { stagePaths } from './lib/paths';
+import {
+  renderLoginTestBody,
+  type LoginStructure,
+} from './lib/login-discovery';
 
 interface Scenario {
   id: number;
@@ -61,6 +65,8 @@ interface ApplicationMap {
     delete?: string | null;
     completed?: string | null;
   };
+
+  loginStructure?: LoginStructure;
 
   dynamicDiscovery?: {
     enabled?: boolean;
@@ -718,45 +724,51 @@ function generateDeleteTodoTest(
 }
 
 // --------------------------------------------------
-// GENERIC APPLICATION TEST
+// LOGIN
 // --------------------------------------------------
 
-function generateGenericTest(
-  scenario: Scenario
-): string {
-  const actions =
-    scenario.actions || [];
+const LOGIN_SCENARIOS = [
+  'Login Form Is Displayed',
+  'Password Is Masked',
+  'Empty Credentials',
+  'Invalid Credentials',
+  'Successful Login',
+];
 
-  const actionComments =
-    actions
-      .map(
-        (action) =>
-          `  // ${action}`
-      )
-      .join('\n');
-
-  return `${createHeader(
-    scenario
-  )}test('${escapeSingleQuotes(
-    scenario.title
-  )}', async ({ page }) => {
-  await page.goto('${escapeSingleQuotes(
-    appUrl
-  )}');
-
-${actionComments}
-
-  // Qyntra discovered this scenario,
-  // but does not have enough application-specific
-  // evidence to safely invent selectors or assertions.
-
-  await expect(page).toHaveURL(
-    '${escapeSingleQuotes(
+function generateLoginTest(
+  scenario: Scenario,
+  login: LoginStructure
+): {
+  content: string;
+  generated: boolean;
+  reason?: string;
+} {
+  const rendered =
+    renderLoginTestBody(
+      scenario.title,
+      login,
       appUrl
-    )}'
-  );
+    );
+
+  if ('skip' in rendered) {
+    return {
+      content: '',
+      generated: false,
+      reason: rendered.skip,
+    };
+  }
+
+  return {
+    content: `${createHeader(
+      scenario
+    )}test('${escapeSingleQuotes(
+      scenario.title
+    )}', async ({ page }) => {
+${rendered.body}
 });
-`;
+`,
+    generated: true,
+  };
 }
 
 // --------------------------------------------------
@@ -778,6 +790,18 @@ function generateTest(
     getCapability(
       scenario
     ).toLowerCase();
+
+  if (
+    application.loginStructure?.detected === true &&
+    LOGIN_SCENARIOS.includes(
+      scenario.title
+    )
+  ) {
+    return generateLoginTest(
+      scenario,
+      application.loginStructure
+    );
+  }
 
   if (
     todoDetected ||
@@ -907,12 +931,15 @@ function generateTest(
     }
   }
 
+  // A placeholder that only checks the URL passes against any page, so
+  // emitting it would count as evidence the scenario works. Skipping
+  // keeps the scenario visible as unverified instead.
   return {
-    content:
-      generateGenericTest(
-        scenario
-      ),
-    generated: true,
+    content: '',
+    generated: false,
+    reason:
+      'No application-specific generator for this scenario; ' +
+      'Qyntra will not count a placeholder test as evidence.',
   };
 }
 

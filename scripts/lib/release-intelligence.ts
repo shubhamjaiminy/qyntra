@@ -94,6 +94,15 @@ export interface ReleaseInputs {
     /** Prior runs the current one was compared against. */
     runsCompared: number;
   };
+
+  /**
+   * Scenarios Qyntra identified but could not generate a test for.
+   * Undefined when generation is not part of the run.
+   */
+  coverage?: {
+    /** Titles of P0 scenarios with no executed test. */
+    unverifiedCritical: string[];
+  };
 }
 
 // --------------------------------------------------
@@ -548,6 +557,19 @@ export function decideRelease(
     );
   }
 
+  // Passing tests say nothing about scenarios that were never tested.
+  // Without this a login page with an untested happy path read as
+  // "SAFE, High confidence".
+  const unverifiedCritical =
+    inputs.coverage?.unverifiedCritical ?? [];
+
+  if (unverifiedCritical.length > 0) {
+    warnings.push(
+      `${unverifiedCritical.length} critical (P0) scenario(s) have no ` +
+        `test and are unverified: ${unverifiedCritical.join(', ')}.`
+    );
+  }
+
   // Being explicit about the missing baseline matters: without it a
   // reader cannot tell "no regressions" from "we could not check".
   if (
@@ -580,6 +602,10 @@ export function decideRelease(
     lowConfidenceAttributions > failures.length / 2
   ) {
     decisionConfidence = 'Low';
+  }
+
+  if (unverifiedCritical.length > 0 && decisionConfidence === 'High') {
+    decisionConfidence = 'Medium';
   }
 
   if (execution.total === 0) {

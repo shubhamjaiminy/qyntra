@@ -1,6 +1,7 @@
 import fs from 'fs';
 
 import { stagePaths } from './lib/paths';
+import type { LoginStructure } from './lib/login-discovery';
 
 interface Capability {
   name?: string;
@@ -30,6 +31,8 @@ interface ApplicationMap {
   capabilities?: Capability[];
 
   todoStructure?: TodoStructure;
+
+  loginStructure?: LoginStructure;
 
   dynamicDiscovery?: {
     enabled?: boolean;
@@ -251,6 +254,158 @@ function createScenario(
 }
 
 // --------------------------------------------------
+// LOGIN SCENARIOS
+// --------------------------------------------------
+
+/**
+ * Scenarios for a structurally detected login form. Each negative
+ * scenario exists only when its probe ran, and its evidence quotes what
+ * the probe observed — that observation is what the test will assert.
+ */
+function loginScenarios(
+  login: LoginStructure,
+  capability: Capability
+): Omit<Scenario, 'id'>[] {
+  const field =
+    login.identifierLabel ||
+    'identifier';
+
+  const base = (
+    title: string,
+    priority: Scenario['priority'],
+    type: Scenario['type'],
+    description: string,
+    evidence: string,
+    actions: string[]
+  ): Omit<Scenario, 'id'> => ({
+    title,
+    priority,
+    type,
+    description,
+    mappedCapability:
+      capability.name ||
+      'Authentication',
+    evidence,
+    actions,
+  });
+
+  const scenarios = [
+    base(
+      'Login Form Is Displayed',
+      'P0',
+      'Positive',
+      'The login form renders with every control a user needs.',
+      login.evidence.join('; '),
+      [
+        'Navigate to the login page.',
+        `Verify the "${field}" field is visible.`,
+        ...(login.password
+          ? ['Verify the password field is visible.']
+          : []),
+        'Verify the submit control is visible.',
+      ]
+    ),
+  ];
+
+  if (login.password) {
+    scenarios.push(
+      base(
+        'Password Is Masked',
+        'P1',
+        'Positive',
+        'The password field hides what the user types.',
+        'Password field detected on the login form.',
+        [
+          'Navigate to the login page.',
+          'Verify the password field has type="password".',
+        ]
+      )
+    );
+  }
+
+  const empty =
+    login.probes.empty;
+
+  if (
+    empty?.stayedOnPage &&
+    (empty.submitted || empty.submitDisabled)
+  ) {
+    scenarios.push(
+      base(
+        'Empty Credentials',
+        'P1',
+        'Negative',
+        'An empty submission does not get past the login page.',
+        empty.submitDisabled
+          ? 'Probe: submit is disabled while the form is empty.'
+          : empty.message
+            ? `Probe: empty submit stayed on the page and showed "${empty.message}".`
+            : 'Probe: empty submit stayed on the login page.',
+        [
+          'Navigate to the login page.',
+          'Leave every field empty.',
+          empty.submitDisabled
+            ? 'Verify the submit control is disabled.'
+            : 'Submit the form.',
+          'Verify the user is still on the login page.',
+        ]
+      )
+    );
+  }
+
+  const invalid =
+    login.probes.invalid;
+
+  if (
+    invalid?.submitted &&
+    invalid.stayedOnPage
+  ) {
+    scenarios.push(
+      base(
+        'Invalid Credentials',
+        'P0',
+        'Negative',
+        'Credentials that match no account are rejected.',
+        invalid.message
+          ? `Probe: invalid submit stayed on the page and showed "${invalid.message}".`
+          : 'Probe: invalid submit stayed on the login page.',
+        [
+          'Navigate to the login page.',
+          `Enter a "${field}" that cannot belong to a real account.`,
+          ...(login.password
+            ? ['Enter an invalid password.']
+            : []),
+          'Submit the form.',
+          ...(invalid.message
+            ? [`Verify "${invalid.message}" is displayed.`]
+            : []),
+          'Verify the user is still on the login page.',
+        ]
+      )
+    );
+  }
+
+  // Listed so the report shows the happy path as unverified, not absent.
+  scenarios.push(
+    base(
+      'Successful Login',
+      'P0',
+      'Positive',
+      'A user with valid credentials gets past the login page.',
+      'Requires a test account; none is configured.',
+      [
+        'Navigate to the login page.',
+        'Enter valid test-account credentials.',
+        'Submit the form.',
+        'Verify the user is authenticated.',
+      ]
+    )
+  );
+
+  return scenarios;
+}
+
+// --------------------------------------------------
 // SCENARIO GENERATION
 // --------------------------------------------------
 
@@ -466,7 +621,23 @@ function generateScenarios(): Scenario[] {
       'Sign In'
     );
 
-  if (authentication) {
+  const login =
+    applicationMap.loginStructure;
+
+  if (
+    authentication &&
+    login?.detected === true
+  ) {
+    for (const scenario of loginScenarios(
+      login,
+      authentication
+    )) {
+      scenarios.push({
+        ...scenario,
+        id: id++,
+      });
+    }
+  } else if (authentication) {
     scenarios.push(
       createScenario(
         id++,

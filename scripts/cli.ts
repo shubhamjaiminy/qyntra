@@ -241,6 +241,7 @@ function runStage(
       env: {
         ...process.env,
         ...sessionEnv(config),
+        ...(config.configPath ? { QYNTRA_CONFIG: config.configPath } : {}),
         QYNTRA_OUTPUT_DIR: artifactPaths(config).outputDir,
         QYNTRA_BASE_URL: config.app.baseUrl,
       },
@@ -511,6 +512,10 @@ interface AIAnalysisArtifact {
   }[];
 }
 
+interface GenerationArtifact {
+  files?: { scenario?: string; priority?: string; status?: string }[];
+}
+
 interface RiskArtifact {
   riskLevel?: string;
   riskScore?: number;
@@ -546,6 +551,9 @@ function buildDecision(
 
   const riskArtifact =
     readOptionalArtifact<RiskArtifact>(paths.riskAnalysis);
+
+  const generationArtifact =
+    readOptionalArtifact<GenerationArtifact>(paths.generationSummary);
 
   const summary = failuresArtifact?.summary ?? {};
 
@@ -646,6 +654,12 @@ function buildDecision(
       available: priorRuns.length > 0,
       runsCompared: priorRuns.length,
     },
+
+    coverage: generationArtifact && {
+      unverifiedCritical: (generationArtifact.files ?? [])
+        .filter((file) => file.priority === 'P0' && file.status === 'SKIPPED')
+        .map((file) => String(file.scenario ?? 'Unnamed scenario')),
+    },
   });
 
   // Record this run only after the verdict is decided, so the run being
@@ -719,6 +733,9 @@ function commandGate(args: ParsedArgs): number {
   writeArtifact(paths.releaseDecision, {
     generatedAt: new Date().toISOString(),
     application: config.app.name,
+    // Lets the dashboard refuse a decision made about other results.
+    resultsGeneratedAt:
+      readOptionalArtifact<FailuresArtifact>(paths.failures)?.generatedAt,
     ...decision,
   });
 
@@ -793,11 +810,25 @@ async function commandRun(args: ParsedArgs): Promise<number> {
 
   fs.mkdirSync(path.dirname(resultsFile), { recursive: true });
 
+  // A results file left by an earlier run must never be judged as this one.
+  fs.rmSync(resultsFile, { force: true });
+
+  // Only the tests generated for this application are evidence about it.
+  // Running all of tests/ once let unrelated suites pass a release Qyntra
+  // had generated nothing for. With nothing generated, Playwright still
+  // writes a zero-test report, which the gate blocks on.
+  const generatedFilter = path
+    .relative(config.rootDir, paths.generatedTests)
+    .split(path.sep)
+    .join('/');
+
   const testRun = spawnSync(
     process.execPath,
     [
       require.resolve('@playwright/test/cli'),
       'test',
+      `${generatedFilter}/`,
+      '--pass-with-no-tests',
       '--reporter=list,json',
     ],
     {
@@ -821,11 +852,15 @@ async function commandRun(args: ParsedArgs): Promise<number> {
 
   runStage('FAILURE AGGREGATION', 'analyze-failures', [], config);
   runStage('FAILURE INTELLIGENCE', 'ai-analyzer', [], config);
-  runStage('REPORTING', 'generate-dashboard', [], config);
 
   log.debug(`Playwright exit status: ${testRun.status ?? 'unknown'}`);
 
-  return commandGate(args);
+  // Gate first: the dashboard displays the gate's verdict, not its own.
+  const gateStatus = commandGate(args);
+
+  runStage('REPORTING', 'generate-dashboard', [], config);
+
+  return gateStatus;
 }
 
 // --------------------------------------------------

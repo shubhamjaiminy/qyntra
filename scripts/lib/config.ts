@@ -265,9 +265,19 @@ function mergeConfig(
   return out;
 }
 
+/**
+ * QYNTRA_CONFIG (set by the CLI when it spawns a stage) wins over the
+ * default filenames. Without it, `qyntra run --config other.json`
+ * reached every stage as the default config — which once made the
+ * generator clean the wrong tests directory.
+ */
 export function findConfigFile(
   rootDir: string
 ): string | undefined {
+  if (process.env.QYNTRA_CONFIG) {
+    return path.resolve(rootDir, process.env.QYNTRA_CONFIG);
+  }
+
   for (const candidate of CONFIG_FILENAMES) {
     const full = path.join(rootDir, candidate);
 
