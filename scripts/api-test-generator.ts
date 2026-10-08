@@ -20,7 +20,8 @@ import path from 'path';
 import dotenv from 'dotenv';
 
 import type { ApiCall } from './lib/api-observation';
-import { generateApiSpecs, type SkippedApiCall } from './lib/api-tests';
+import { crudSpecSource, planCrud } from './lib/api-mutations';
+import { generateApiSpecs, SHAPE_HELPER, type SkippedApiCall } from './lib/api-tests';
 import { stageApiConfig } from './lib/config';
 import { planFromOpenApi, type OpenApiPlan } from './lib/openapi';
 import { loadOpenApi } from './lib/openapi-loader';
@@ -45,10 +46,12 @@ async function main(): Promise<void> {
 
   let plan: OpenApiPlan | undefined;
   let specError: string | undefined;
+  let specDoc: any;
 
   if (apiConfig.openapi) {
     try {
       const spec = await loadOpenApi(apiConfig.openapi, process.cwd());
+      specDoc = spec.doc;
 
       plan = planFromOpenApi(spec.doc, {
         specLocation: spec.location,
@@ -87,6 +90,39 @@ async function main(): Promise<void> {
 
   for (const spec of generation.specs) {
     fs.writeFileSync(path.join(paths.generatedTests, spec.fileName), spec.source);
+  }
+
+  // Write-path lifecycles, only when opted in for named sandbox hosts.
+  if (apiConfig.mutations.enabled && plan && specDoc) {
+    const crud = planCrud(specDoc, {
+      server: plan.server,
+      allowedHosts: apiConfig.mutations.allowedHosts,
+      auth: apiConfig.auth,
+    });
+
+    // Read-only skips of writes are superseded by the lifecycle plan.
+    const planned = new Set(crud.plans.map((entry) => `POST ${entry.resource}`));
+
+    for (let index = skipped.length - 1; index >= 0; index--) {
+      if (planned.has(skipped[index].call)) {
+        skipped.splice(index, 1);
+      }
+    }
+
+    skipped.push(...crud.skipped);
+
+    const firstNumber = generation.specs.length + 1;
+
+    crud.plans.forEach((entry, index) => {
+      const fileName = `api-${String(firstNumber + index).padStart(2, '0')}-write-${
+        entry.resource.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'root'
+      }.spec.ts`;
+
+      const title = `${entry.resource}: create, read back${entry.update ? ', update' : ''}${entry.remove ? ', delete' : ''}`;
+
+      fs.writeFileSync(path.join(paths.generatedTests, fileName), crudSpecSource(entry, SHAPE_HELPER));
+      generation.specs.push({ fileName, tests: [title], source: '' });
+    });
   }
 
   writeArtifact(paths.apiGeneration, {

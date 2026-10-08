@@ -209,6 +209,12 @@ export interface ApiConfig {
    * send and the env var holding its value. Never the value itself.
    */
   auth?: { header: string; env: string };
+
+  /**
+   * Write-path lifecycle tests (create → read → update → delete). Off
+   * unless enabled, and only ever against allowedHosts.
+   */
+  mutations: { enabled: boolean; allowedHosts: string[] };
 }
 
 /** Light, sequential latency measurement — never a load test. */
@@ -321,6 +327,7 @@ function defaults(rootDir: string): QyntraConfig {
     api: {
       parameters: {},
       exclude: [],
+      mutations: { enabled: false, allowedHosts: [] },
     },
 
     performance: {
@@ -896,7 +903,33 @@ export function resolveApiConfig(raw: unknown): ApiConfig {
     parameters,
     exclude: Array.isArray(api.exclude) ? api.exclude.map((entry) => String(entry)) : [],
     ...(auth ? { auth } : {}),
+    mutations: resolveMutations(api.mutations),
   };
+}
+
+function resolveMutations(raw: unknown): ApiConfig['mutations'] {
+  const mutations = isPlainObject(raw) ? raw : {};
+  const enabled = mutations.enabled === true;
+
+  const allowedHosts = Array.isArray(mutations.allowedHosts)
+    ? mutations.allowedHosts.map((host) => String(host).trim().toLowerCase()).filter(Boolean)
+    : [];
+
+  if (enabled && allowedHosts.length === 0) {
+    throw new ConfigError(
+      'api.mutations is enabled but names no allowedHosts.',
+      'Write tests create and delete real records, so they need an explicit sandbox: ' +
+        '"mutations": { "enabled": true, "allowedHosts": ["staging-api.acme.example"] }'
+    );
+  }
+
+  if (allowedHosts.some((host) => host.includes('/') || host.includes(':'))) {
+    throw new ConfigError(
+      'api.mutations.allowedHosts takes host names only, e.g. "staging-api.acme.example".'
+    );
+  }
+
+  return { enabled, allowedHosts };
 }
 
 /** Lenient stage-level read, like stageAIConfig(). */

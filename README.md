@@ -326,6 +326,49 @@ credentials (`/logout`, `/login`, `/reset`, `/token` — specs document
 these as GET often enough that "GET is safe" cannot be trusted);
 operations taking credential-like parameters; deprecated operations.
 
+### Write paths, in a sandbox
+
+Read-only tests cannot tell whether an API *stores* what it is given.
+Opt in for a sandbox host and Qyntra adds a lifecycle test per resource
+the spec can create and read back:
+
+```json
+"api": {
+  "openapi": "openapi.yaml",
+  "mutations": { "enabled": true, "allowedHosts": ["staging-api.acme.example"] }
+}
+```
+
+```
+✓ api-07-write-pet.spec.ts
+   └─ /pet: create, read back, update, delete
+```
+
+create (`POST /pet`) → read back and compare what was stored with what
+was sent → update a field and read it again (when the spec has
+`PUT`/`PATCH`) → delete → confirm it is gone (when a 404 is documented).
+
+The safety is layered, because these tests change real data:
+
+- Off by default. Enabling without `allowedHosts` is a configuration
+  error, and hosts are bare names, never URLs.
+- Writes are planned only when the API server is an allowed host; point
+  `api.baseUrl` anywhere else and no write test is generated. The test
+  re-checks the host when it runs, so editing the file cannot bypass it.
+- Records get a unique id and a `qyntra-test-…` marker in every string
+  field. The spec's example ids are never used — they often name real,
+  shared records. References to other records (`ownerId`) keep the
+  spec's example, so they point at something that exists.
+- Delete runs in `finally`: a failed assertion halfway through still
+  removes the record. A resource whose spec documents no `DELETE` is
+  flagged, and the marker is printed so its record can be found.
+- The record's key is never the field that gets updated.
+
+Against the public Petstore sandbox, the pet lifecycle passed end to
+end, and creating an order or a user returned 500 — confirmed with curl
+to be the server. A test forced to fail after creating a pet still
+deleted it.
+
 `qyntra doctor` loads the spec and reports how much of it is testable
 (`OpenAPI spec : Shop API 2.1.0 — 14 of 31 operations testable`), so a
 wrong path or URL fails before a run, not during one.
@@ -912,9 +955,9 @@ your own CI cache. Qyntra has nowhere to send it.
 
 Stated plainly, because you will find them anyway:
 
-- **API tests are read-only.** Contract tests come from GET traffic
-  observed during discovery and from GET operations in your OpenAPI
-  spec; writes are never called. Swagger 2.0 must be converted to
+- **Writes are tested only from an OpenAPI spec, in a named sandbox.**
+  Observed traffic is never replayed as a write; lifecycle tests need
+  `api.mutations` and a spec that documents a readable item path. Swagger 2.0 must be converted to
   OpenAPI 3.x first, and external `$ref`s are not followed.
 - **No load testing.** Performance is tracked as a regression from a
   light sequential measurement, not by generating load; capacity and

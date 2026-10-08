@@ -272,7 +272,7 @@ ${withShape ? `\nconst SHAPE: Shape = ${JSON.stringify(call.responseShape, null,
  * on Qyntra. Scalars tolerate null: an observed string field may be
  * null in another record, and that is not a contract break.
  */
-const SHAPE_HELPER = `
+export const SHAPE_HELPER = `
 type Shape =
   | { type: 'string' | 'number' | 'boolean' | 'any' }
   | { type: 'array'; items?: Shape }
