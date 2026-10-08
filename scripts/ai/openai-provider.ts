@@ -53,10 +53,27 @@ export class OpenAIProvider
 
           {
             role: 'user',
-            content:
-              userMessage(
-                context
-              ),
+            content: [
+              {
+                type: 'input_text',
+                text:
+                  userMessage(
+                    context
+                  ),
+              },
+
+              ...(context.screenshot
+                ? [
+                    {
+                      type: 'input_image' as const,
+                      detail: 'auto' as const,
+                      image_url:
+                        `data:${context.screenshot.mimeType};base64,` +
+                        context.screenshot.base64,
+                    },
+                  ]
+                : []),
+            ],
           },
         ],
       });

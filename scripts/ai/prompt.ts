@@ -21,6 +21,37 @@ failure using:
 - framework
 - discovered selectors
 - test context
+- browser evidence, when present:
+  - evidence.steps: the test's actions in
+    order; the failing one is marked
+  - evidence.pageSnapshot: accessibility
+    tree of the page or element at failure
+  - evidence.pageErrors: uncaught
+    exceptions thrown by the application
+  - evidence.failedRequests: HTTP 4xx/5xx
+    or requests that never completed
+  - evidence.consoleErrors: errors the
+    application logged
+- a screenshot of the page at failure,
+  when one is attached
+
+Weigh the browser evidence heavily. A 5xx
+response or an uncaught page exception
+during the test is strong evidence of a
+product defect, even when the visible
+symptom is a missing element or a timeout.
+Use pageSnapshot to check what was really
+on the page before blaming a locator.
+
+For an assertion failure on a page with no
+application errors, check whether the
+test's own steps could have produced the
+expected value. If they could not (for
+example, the steps create one item but the
+assertion expects five), the expectation
+is wrong: that is a test defect.
+
+Cite the specific evidence in rootCause.
 
 Determine whether the failure is most likely:
 
@@ -117,11 +148,23 @@ export const ANALYSIS_JSON_SCHEMA = {
   ],
 } as const;
 
+/**
+ * The context as JSON text. The screenshot is excluded: it travels as
+ * an image part, and base64 inside the text would cost tokens and
+ * tell a text model nothing.
+ */
 export function userMessage(
   context: FailureContext
 ): string {
+  const { screenshot, ...text } = context;
+
   return JSON.stringify(
-    context,
+    {
+      ...text,
+      ...(screenshot
+        ? { screenshot: 'attached as an image' }
+        : {}),
+    },
     null,
     2
   );

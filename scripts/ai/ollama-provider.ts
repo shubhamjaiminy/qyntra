@@ -30,6 +30,9 @@ export class OllamaProvider
 
   private model: string;
 
+  /** Resolved once per run; most local coding models cannot see. */
+  private vision: Promise<boolean> | undefined;
+
   constructor(config: AIConfig) {
     this.baseUrl =
       ollamaBaseUrl(config);
@@ -38,9 +41,40 @@ export class OllamaProvider
       config.model;
   }
 
+  /**
+   * Whether the model accepts images. Sending one to a text-only model
+   * fails the whole request, so ask Ollama rather than guess from the
+   * model name.
+   */
+  private supportsVision(): Promise<boolean> {
+    this.vision ??= fetch(
+      `${this.baseUrl}/api/show`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: this.model }),
+        signal: AbortSignal.timeout(10_000),
+      }
+    )
+      .then((response) => response.json())
+      .then((body: any) =>
+        Array.isArray(body?.capabilities) &&
+        body.capabilities.includes('vision')
+      )
+      .catch(() => false);
+
+    return this.vision;
+  }
+
   async analyzeFailure(
     context: FailureContext
   ): Promise<AIAnalysis> {
+    const images =
+      context.screenshot &&
+      (await this.supportsVision())
+        ? [context.screenshot.base64]
+        : undefined;
+
     let response: Response;
 
     try {
@@ -66,9 +100,14 @@ export class OllamaProvider
               // Greedy decoding with a fixed seed: the same failure
               // must get the same diagnosis on every run, or the gate
               // could flip a verdict on identical evidence.
+              //
+              // num_ctx: Ollama's default window silently truncates
+              // the prompt once a page snapshot and trace evidence are
+              // included, dropping the very evidence that matters.
               options: {
                 temperature: 0,
                 seed: 42,
+                num_ctx: 16_384,
               },
 
               messages: [
@@ -83,6 +122,7 @@ export class OllamaProvider
                     userMessage(
                       context
                     ),
+                  ...(images ? { images } : {}),
                 },
               ],
             }),

@@ -14,6 +14,7 @@ import {
   describeProvider,
 } from './ai/create-provider';
 import { stageAIConfig } from './lib/config';
+import type { FailureEvidence } from './lib/failure-evidence';
 import { stagePaths } from './lib/paths';
 
 dotenv.config({ quiet: true });
@@ -102,6 +103,8 @@ interface AnalysisResult {
   isLikelyProductDefect: boolean;
   /** True when the deterministic fallback produced this, not an LLM. */
   degraded: boolean;
+  /** Carried through for the dashboard. */
+  evidence?: FailureEvidence;
 }
 
 // --------------------------------------------------
@@ -424,6 +427,100 @@ expect(
 // changing the assertion or locator.`;
   }
 
+  // ------------------------------------------------
+  // BROWSER EVIDENCE
+  // ------------------------------------------------
+
+  // The error text says what the test saw; the trace says what the
+  // application did. A 5xx or an uncaught exception during the test is
+  // the application failing, even when the symptom is "element not
+  // found" — the element is missing because the page broke.
+  const evidence: FailureEvidence | undefined =
+    failure.evidence;
+
+  const serverErrors =
+    (evidence?.failedRequests ?? []).filter(
+      (request) =>
+        request.status >= 500
+    );
+
+  const unfinishedRequests =
+    (evidence?.failedRequests ?? []).filter(
+      (request) =>
+        request.status === 0
+    );
+
+  const pageErrors =
+    evidence?.pageErrors ?? [];
+
+  const findings: string[] = [];
+
+  if (serverErrors.length > 0) {
+    findings.push(
+      `The application returned ${serverErrors
+        .slice(0, 3)
+        .map((request) => `HTTP ${request.status} for ${request.method} ${request.url}`)
+        .join('; ')}.`
+    );
+  }
+
+  if (pageErrors.length > 0) {
+    findings.push(
+      `The page threw an uncaught exception: ${pageErrors[0]}.`
+    );
+  }
+
+  if (
+    findings.length > 0
+  ) {
+    isLikelyProductDefect =
+      true;
+
+    isLikelyTestDefect =
+      false;
+
+    // An application failure is at least High; never lower a Critical.
+    if (
+      (severity as Severity) !==
+      'Critical'
+    ) {
+      severity =
+        'High';
+    }
+
+    // Replace, not prepend: the text-only diagnosis ("the locator does
+    // not match") is exactly what the evidence just disproved, and a
+    // root cause that argues with itself is worse than none.
+    if (serverErrors.length > 0) {
+      category =
+        'API / Network';
+    }
+
+    rootCause =
+      `${findings.join(' ')} The failed assertion is a symptom of this, not the cause.`;
+
+    whyItHappened =
+      'Browser evidence from the trace shows the application failing during the test, ' +
+      'so the visible symptom is most likely a consequence of that failure rather than a broken test.';
+
+    recommendation =
+      'Investigate the failing request or exception first; fix the application before changing the test.';
+
+    suggestedFix =
+      'Do not change the test. Reproduce the failing request or exception, fix it in the application, then re-run.';
+
+    // Test code would be the wrong fix for an application failure.
+    suggestedCode =
+      '';
+  } else if (
+    unfinishedRequests.length > 0
+  ) {
+    whyItHappened +=
+      ` ${unfinishedRequests.length} request(s) never completed ` +
+      `(e.g. ${unfinishedRequests[0].url}: ${unfinishedRequests[0].failure ?? 'no response'}), ` +
+      'which can indicate an environment or network problem.';
+  }
+
   return {
     test:
       failure.test,
@@ -462,6 +559,8 @@ expect(
 
     degraded:
       true,
+
+    evidence,
   };
 }
 
@@ -619,7 +718,11 @@ async function main(): Promise<void> {
         const context:
           FailureContext =
           buildFailureContext(
-            failure
+            failure,
+            {
+              includeScreenshot:
+                aiConfig.includeScreenshots !== false,
+            }
           );
 
         const aiResult:
@@ -688,6 +791,9 @@ async function main(): Promise<void> {
 
           degraded:
             false,
+
+          evidence:
+            failure.evidence,
         };
 
         console.log(
@@ -878,20 +984,21 @@ async function main(): Promise<void> {
 
       console.log('');
 
-      console.log(
-        'Suggested Code'
-      );
+      if (analysis.suggestedCode) {
+        console.log(
+          'Suggested Code'
+        );
 
-      console.log(
-        '--------------'
-      );
+        console.log(
+          '--------------'
+        );
 
-      console.log(
-        analysis.suggestedCode ??
-        ''
-      );
+        console.log(
+          analysis.suggestedCode
+        );
 
-      console.log('');
+        console.log('');
+      }
     }
   );
 

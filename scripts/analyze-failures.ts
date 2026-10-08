@@ -1,5 +1,6 @@
 import fs from 'fs';
 
+import { collectEvidence, hasSignals } from './lib/failure-evidence';
 import { stagePaths } from './lib/paths';
 
 // Artifact locations come from one resolver so this stage writes where
@@ -401,7 +402,15 @@ function walkSuites(
             error,
 
           testSource:
-            sourceInfo.source
+            sourceInfo.source,
+
+          // What the browser saw: console, page errors, failed
+          // requests, steps, page snapshot. From the last attempt, so
+          // with CI retries it matches the reported error.
+          evidence:
+            collectEvidence(
+              lastResult?.attachments
+            )
         });
 
         continue;
@@ -569,6 +578,52 @@ if (failures.length > 0) {
       );
 
       console.log('');
+
+      const evidence =
+        failure.evidence;
+
+      if (
+        hasSignals(
+          evidence
+        )
+      ) {
+        console.log(
+          'Browser Evidence:'
+        );
+
+        for (const error of evidence.pageErrors) {
+          console.log(
+            `  Page error    : ${error}`
+          );
+        }
+
+        for (const request of evidence.failedRequests) {
+          console.log(
+            `  Failed request: ${request.method} ${request.url} → ` +
+            (request.failure ?? request.status)
+          );
+        }
+
+        for (const message of evidence.consoleErrors) {
+          console.log(
+            `  Console       : ${message}`
+          );
+        }
+
+        if (evidence.screenshotPath) {
+          console.log(
+            `  Screenshot    : ${evidence.screenshotPath}`
+          );
+        }
+
+        if (evidence.tracePath) {
+          console.log(
+            `  Trace         : npx playwright show-trace "${evidence.tracePath}"`
+          );
+        }
+
+        console.log('');
+      }
 
       if (failure.testSource) {
         console.log(

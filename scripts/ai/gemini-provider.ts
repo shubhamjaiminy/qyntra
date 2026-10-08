@@ -50,10 +50,32 @@ export class GeminiProvider
       await this.client.models.generateContent({
         model: this.model,
 
-        contents:
-          userMessage(
-            context
-          ),
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              {
+                text:
+                  userMessage(
+                    context
+                  ),
+              },
+
+              ...(context.screenshot
+                ? [
+                    {
+                      inlineData: {
+                        mimeType:
+                          context.screenshot.mimeType,
+                        data:
+                          context.screenshot.base64,
+                      },
+                    },
+                  ]
+                : []),
+            ],
+          },
+        ],
 
         config: {
           systemInstruction:

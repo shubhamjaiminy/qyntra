@@ -5,6 +5,33 @@ export interface FailureContext {
   stackTrace: string;
   sourceCode: string;
   applicationMap: unknown;
+
+  /**
+   * What the browser saw: console and page errors, failed requests,
+   * the test's steps and a page snapshot. Already sanitised.
+   */
+  evidence?: {
+    pageSnapshot?: string;
+    consoleErrors: string[];
+    pageErrors: string[];
+    failedRequests: {
+      method: string;
+      url: string;
+      status: number;
+      failure?: string;
+      resourceType?: string;
+    }[];
+    steps: string[];
+  };
+
+  /**
+   * Failure screenshot, for providers that accept images. Sent as an
+   * image part, never inside the JSON text.
+   */
+  screenshot?: {
+    mimeType: string;
+    base64: string;
+  };
 }
 
 export interface AIAnalysis {

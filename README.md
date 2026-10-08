@@ -193,6 +193,39 @@ rejected and tests will land on the login page.
 
 ---
 
+## How failures are diagnosed
+
+The error message says what the test saw. The browser says what the
+application did, and that is usually what separates a broken test from
+a broken product. For every failure Qyntra reads the artifacts
+Playwright already captures (`trace: 'retain-on-failure'`,
+`screenshot: 'only-on-failure'`) and extracts:
+
+| Evidence | From | Why it matters |
+| -------- | ---- | -------------- |
+| Uncaught page exceptions | trace | The application crashed during the test |
+| Failed requests (4xx/5xx, never completed) | trace | A 500 explains a "missing element" better than any locator |
+| Console errors and warnings | trace | What the application itself logged |
+| The test's steps, failing one marked | trace | Could these steps even produce the expected state? |
+| Page accessibility snapshot | `error-context.md` | What was actually on the page |
+| Screenshot | attachment | Sent as an image to vision-capable models |
+
+A 5xx response or an uncaught exception during the test makes Qyntra
+attribute the failure to the product, even when the visible symptom is a
+timeout or a missing element — the element is missing *because* the page
+broke. This applies with no AI configured too: the deterministic analyzer
+uses the same evidence.
+
+Every failure card on the dashboard shows this evidence with the
+screenshot embedded, plus the command to open the full trace.
+
+Screenshots reach a model only if it can see. Gemini and OpenAI can;
+among local models `qwen2.5-coder:7b` (the default) cannot, while
+`gemma3:4b` can and fits in less memory. Qyntra asks Ollama for the
+model's capabilities rather than guessing from its name.
+
+---
+
 ## How risk is rated
 
 Risk multiplies the cost of a failure, so it is derived from what
@@ -417,9 +450,19 @@ with `"provider": "none"` Qyntra uses its deterministic analyzer; either
 way Qyntra makes no external AI calls at all.
 
 When an LLM provider is configured, each failure analysis sends: the test
-name, the error and stack trace, the failing test's source, and the
-discovered application map (selectors, headings, endpoint paths). It does
-not send your application source code.
+name, the error and stack trace, the failing test's source, the
+discovered application map (selectors, headings, endpoint paths), and the
+browser evidence described in [How failures are diagnosed](#how-failures-are-diagnosed):
+the test's steps, a page accessibility snapshot, console errors, uncaught
+page errors and failed request URLs. Request URLs are reduced to origin
+and path — query strings and fragments are dropped — and values that look
+like credentials are masked. It does not send your application source
+code, request or response bodies, cookies, or the video.
+
+The failure screenshot is also sent, as an image, to providers that
+accept one. Screenshots can show whatever was on screen, including
+customer data in a staging environment; set
+`"ai": { "includeScreenshots": false }` to keep them local.
 
 Run history stays local: it is a file in your output directory, held in
 your own CI cache. Qyntra has nowhere to send it.

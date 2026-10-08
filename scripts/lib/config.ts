@@ -87,6 +87,13 @@ export interface AIConfig {
 
   /** Provider endpoint. Only used by ollama today. */
   baseUrl?: string;
+
+  /**
+   * Send the failure screenshot to providers that accept images.
+   * Defaults to true; set false when screenshots may show customer
+   * data that must not reach a cloud provider.
+   */
+  includeScreenshots?: boolean;
 }
 
 /**
@@ -732,6 +739,7 @@ export function resolveAIConfig(raw: unknown): AIConfig {
     model: String(ai.model ?? defaults.model),
     apiKeyEnv: String(ai.apiKeyEnv ?? defaults.apiKeyEnv),
     ...(baseUrl !== undefined ? { baseUrl } : {}),
+    includeScreenshots: ai.includeScreenshots !== false,
   };
 }
 

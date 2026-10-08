@@ -1,5 +1,6 @@
 import fs from 'fs';
 
+import type { FailureEvidence } from './lib/failure-evidence';
 import { stagePaths } from './lib/paths';
 
 type Result = {
@@ -41,6 +42,7 @@ type AIAnalysis = {
   suggestedFix?: string;
   suggestedCode?: string;
   confidence?: 'Low' | 'Medium' | 'High';
+  evidence?: FailureEvidence;
 };
 
 type AIReport = {
@@ -171,6 +173,123 @@ function readJson<T>(
   } catch {
     return null;
   }
+}
+
+/** Screenshots embedded per dashboard, so a huge run stays openable. */
+const MAX_EMBEDDED_SCREENSHOTS = 10;
+const MAX_EMBEDDED_SCREENSHOT_BYTES = 2 * 1024 * 1024;
+
+let embeddedScreenshots = 0;
+
+/**
+ * Inline the screenshot as a data URI. CI uploads qyntra-out/ and
+ * test-results/ as separate artifacts, so a relative link would break
+ * the moment the dashboard is downloaded on its own.
+ */
+function screenshotDataUri(
+  filePath: string | undefined
+): string | null {
+  if (
+    !filePath ||
+    embeddedScreenshots >= MAX_EMBEDDED_SCREENSHOTS
+  ) {
+    return null;
+  }
+
+  try {
+    const stat = fs.statSync(filePath);
+
+    if (stat.size === 0 || stat.size > MAX_EMBEDDED_SCREENSHOT_BYTES) {
+      return null;
+    }
+
+    embeddedScreenshots += 1;
+
+    const mimeType =
+      /\.jpe?g$/i.test(filePath) ? 'image/jpeg' : 'image/png';
+
+    return `data:${mimeType};base64,${fs
+      .readFileSync(filePath)
+      .toString('base64')}`;
+  } catch {
+    return null;
+  }
+}
+
+/** What the browser saw, for one failure card. Empty when nothing. */
+function renderEvidence(
+  evidence: FailureEvidence | undefined
+): string {
+  if (!evidence) {
+    return '';
+  }
+
+  const list = (
+    title: string,
+    items: string[]
+  ) =>
+    items.length === 0
+      ? ''
+      : `
+        <div class="evidence-group">
+          <div class="evidence-label">${escapeHtml(title)}</div>
+          <ul class="evidence-list">
+            ${items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}
+          </ul>
+        </div>
+      `;
+
+  const requests = (evidence.failedRequests ?? []).map(
+    (request) =>
+      `${request.method} ${request.url} → ` +
+      `${request.failure ?? request.status}`
+  );
+
+  const screenshot = screenshotDataUri(evidence.screenshotPath);
+
+  const body = [
+    list('Page errors', evidence.pageErrors ?? []),
+    list('Failed requests', requests),
+    list('Console', evidence.consoleErrors ?? []),
+    list('Steps', evidence.steps ?? []),
+    evidence.pageSnapshot
+      ? `
+        <div class="evidence-group">
+          <div class="evidence-label">Page at failure</div>
+          <pre class="code-block"><code>${escapeHtml(evidence.pageSnapshot)}</code></pre>
+        </div>
+      `
+      : '',
+    screenshot
+      ? `
+        <div class="evidence-group">
+          <div class="evidence-label">Screenshot</div>
+          <a href="${screenshot}" target="_blank" rel="noopener">
+            <img class="evidence-screenshot" src="${screenshot}" alt="Page at the moment the test failed" />
+          </a>
+        </div>
+      `
+      : '',
+    evidence.tracePath
+      ? `
+        <div class="evidence-group">
+          <div class="evidence-label">Full trace</div>
+          <code class="evidence-command">npx playwright show-trace "${escapeHtml(evidence.tracePath)}"</code>
+        </div>
+      `
+      : '',
+  ].join('');
+
+  if (body.trim() === '') {
+    return '';
+  }
+
+  return `
+    <div class="ai-block evidence-block">
+      <div class="block-title">BROWSER EVIDENCE</div>
+      ${body}
+    </div>
+  `;
 }
 
 function escapeHtml(
@@ -803,6 +922,10 @@ const aiSection =
                         `
                         : ''
                     }
+
+                    ${renderEvidence(
+                      analysis.evidence
+                    )}
 
                   </div>
 
@@ -1587,6 +1710,56 @@ body {
   font-size: 13px;
 
   line-height: 1.6;
+}
+
+.evidence-block {
+  grid-column: 1 / -1;
+}
+
+.evidence-group + .evidence-group {
+  margin-top: 12px;
+}
+
+.evidence-label {
+  font-size: 12px;
+
+  font-weight: 600;
+
+  color: #475467;
+
+  margin-bottom: 4px;
+}
+
+.evidence-list {
+  margin: 0;
+
+  padding-left: 18px;
+
+  font-size: 13px;
+
+  line-height: 1.6;
+
+  color: #344054;
+
+  word-break: break-word;
+}
+
+.evidence-screenshot {
+  max-width: 100%;
+
+  max-height: 360px;
+
+  border: 1px solid #eaecf0;
+
+  border-radius: 8px;
+}
+
+.evidence-command {
+  display: block;
+
+  font-size: 12px;
+
+  word-break: break-all;
 }
 
 .code-block {

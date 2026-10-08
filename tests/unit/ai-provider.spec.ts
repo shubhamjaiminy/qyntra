@@ -32,7 +32,15 @@ test.describe('ai config resolution', () => {
       provider: 'openai',
       model: 'gpt-5-mini',
       apiKeyEnv: 'OPENAI_API_KEY',
+      includeScreenshots: true,
     });
+  });
+
+  test('screenshots can be switched off for privacy', () => {
+    expect(
+      resolveAIConfig({ provider: 'gemini', includeScreenshots: false })
+        .includeScreenshots
+    ).toBe(false);
   });
 
   test('ollama needs no key and gets a local endpoint', () => {
