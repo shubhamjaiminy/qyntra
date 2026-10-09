@@ -83,9 +83,7 @@ never make an untested application look safe.
   },
 
   "ai": {
-    "provider": "openai",
-    "model": "gpt-5-mini",
-    "apiKeyEnv": "OPENAI_API_KEY"
+    "provider": "gemini"
   },
 
   "gate": {
@@ -112,7 +110,7 @@ Set them as CI secrets:
 ```bash
 export QYNTRA_APP_USER="qa-bot@acme.example"
 export QYNTRA_APP_PASSWORD="..."
-export OPENAI_API_KEY="..."
+export GEMINI_API_KEY="..."      # or run Ollama locally: no key at all
 ```
 
 With no API key — or a provider that is out of quota or not running —
@@ -969,8 +967,20 @@ accept one. Screenshots can show whatever was on screen, including
 customer data in a staging environment; set
 `"ai": { "includeScreenshots": false }` to keep them local.
 
-Run history stays local: it is a file in your output directory, held in
-your own CI cache. Qyntra has nowhere to send it.
+**Repair** (when a failure is diagnosed as a test defect) sends the
+failing test file, the same failure context, and the list of elements on
+the page at failure — tag, classes, test ids, roles, labels and short
+visible text, masked like the rest. Proposed patches come back and are
+verified locally; nothing else is sent.
+
+**AI-feature tests** send each test input to *your* AI feature, as
+configured. When a check has a rubric, the feature's answer, the input
+and the rubric go to the judge model (`llm.judge`); with an Ollama judge
+that stays on your machine.
+
+Run history, release outcomes and the performance baseline stay local:
+they are files in your repository and output directory, held in your own
+CI cache. Qyntra has nowhere to send them.
 
 ---
 
@@ -980,8 +990,9 @@ Stated plainly, because you will find them anyway:
 
 - **Writes are tested only from an OpenAPI spec, in a named sandbox.**
   Observed traffic is never replayed as a write; lifecycle tests need
-  `api.mutations` and a spec that documents a readable item path. Swagger 2.0 must be converted to
-  OpenAPI 3.x first, and external `$ref`s are not followed.
+  `api.mutations` and a spec that documents a readable item path.
+  Swagger 2.0 must be converted to OpenAPI 3.x first, and external
+  `$ref`s are not followed.
 - **No load testing.** Performance is tracked as a regression from a
   light sequential measurement, not by generating load; capacity and
   concurrency limits are out of scope.
@@ -1004,8 +1015,10 @@ Stated plainly, because you will find them anyway:
   cache, is bounded to `historyRuns`, and keys on test title — renaming a
   test resets its baseline. Evicting the cache costs you flakiness
   detection until enough runs accumulate again.
-- **Form login only.** Single-page and two-step username/password forms
-  work, including hosted login pages you are redirected to. MFA/OTP,
-  CAPTCHA, SSO buttons ("Sign in with Google") and API-token auth are not
-  supported.
+- **Application login is form-based.** Single-page and two-step
+  username/password forms work, including hosted login pages you are
+  redirected to. MFA/OTP, CAPTCHA and SSO buttons ("Sign in with Google")
+  are not supported. (API and AI-feature tests separately support a
+  header token read from an environment variable: `api.auth`,
+  `llm.features[].auth`.)
 - **Single browser.** Chromium.
