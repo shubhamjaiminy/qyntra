@@ -64,6 +64,14 @@ export class ConfigError extends QyntraError {
   }
 }
 
+/** The application could not be loaded: down, refusing, or 5xx. */
+export class UnreachableError extends QyntraError {
+  constructor(message: string, hint?: string) {
+    super(message, EXIT_APPLICATION_UNREACHABLE, hint);
+    this.name = 'UnreachableError';
+  }
+}
+
 export class AuthenticationError extends QyntraError {
   constructor(message: string, hint?: string) {
     super(message, EXIT_AUTHENTICATION_FAILED, hint);

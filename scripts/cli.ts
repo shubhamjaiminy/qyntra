@@ -98,6 +98,9 @@ import {
 import {
   QyntraError,
   ConfigError,
+  UnreachableError,
+  EXIT_APPLICATION_UNREACHABLE,
+  EXIT_CONFIG_ERROR,
   EXIT_OK,
   EXIT_INTERNAL_ERROR,
   EXIT_QUALITY_GATE_FAILED,
@@ -653,46 +656,90 @@ async function commandDoctor(args: ParsedArgs): Promise<number> {
 
   // Reachability. A wrong or unreachable baseUrl is the single most
   // common setup failure, and it is cheap to detect here.
-  try {
-    const response = await fetch(config.app.baseUrl, {
-      method: 'GET',
-      redirect: 'follow',
-      signal: AbortSignal.timeout(
-        Math.min(config.discovery.timeoutMs, 15_000)
-      ),
-    });
+  const reach = await checkReachability(config);
+  let unreachable: string | undefined;
 
-    log.info(
-      `Reachability  : ${config.app.baseUrl} responded ${response.status}`
-    );
+  if (reach.status !== undefined) {
+    log.info(`Reachability  : ${config.app.baseUrl} responded ${reach.status}`);
+  }
 
-    if (response.status >= 400) {
-      problems.push(
-        `${config.app.baseUrl} returned HTTP ${response.status}. ` +
-          'Qyntra needs an environment it can load.'
-      );
-    }
-  } catch (error) {
-    problems.push(
-      `Could not reach ${config.app.baseUrl}: ` +
-        `${(error as Error)?.message ?? 'unknown error'}`
-    );
+  if (reach.kind === 'unreachable') {
+    unreachable = reach.problem;
+  } else if (reach.kind === 'misconfigured') {
+    problems.push(reach.problem!);
   }
 
   log.blank();
 
-  if (problems.length > 0) {
-    log.error(`${problems.length} problem(s) found:`);
+  if (problems.length > 0 || unreachable) {
+    const all = [...problems, ...(unreachable ? [unreachable] : [])];
 
-    for (const problem of problems) {
+    log.error(`${all.length} problem(s) found:`);
+
+    for (const problem of all) {
       log.error(`  - ${problem}`);
     }
 
-    return (new ConfigError('doctor failed')).exitCode;
+    // Configuration problems first: they are the team's to fix. An
+    // environment that is down is a different exit code, so CI can tell
+    // "our setup is wrong" from "staging is down".
+    return problems.length > 0 ? EXIT_CONFIG_ERROR : EXIT_APPLICATION_UNREACHABLE;
   }
 
   log.info('All checks passed. Ready to run: npx qyntra run');
   return EXIT_OK;
+}
+
+/**
+ * Can the application be loaded? Network failures and 5xx mean the
+ * environment is down (exit 4); a 404 means the URL is wrong (a config
+ * error, exit 2). 401/403 are expected before login when app.auth is
+ * configured.
+ */
+async function checkReachability(config: QyntraConfig): Promise<{
+  kind: 'ok' | 'unreachable' | 'misconfigured';
+  status?: number;
+  problem?: string;
+}> {
+  const url = config.app.baseUrl;
+
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+      signal: AbortSignal.timeout(Math.min(config.discovery.timeoutMs, 15_000)),
+    });
+
+    const status = response.status;
+
+    if (status >= 500) {
+      return { kind: 'unreachable', status, problem: `${url} returned HTTP ${status}: the environment is not healthy.` };
+    }
+
+    if ((status === 401 || status === 403) && config.app.auth) {
+      return { kind: 'ok', status };
+    }
+
+    if (status >= 400) {
+      return {
+        kind: 'misconfigured',
+        status,
+        problem: `${url} returned HTTP ${status}. Check app.baseUrl${status === 401 || status === 403 ? ', or configure app.auth' : ''}.`,
+      };
+    }
+
+    return { kind: 'ok', status };
+  } catch (error) {
+    // Node hides the reason: fetch failed → cause → (AggregateError) errors[0].
+    const cause =
+      (error as any)?.cause?.code ??
+      (error as any)?.cause?.errors?.[0]?.code ??
+      (error as any)?.cause?.message ??
+      (error as Error)?.message ??
+      'unknown error';
+
+    return { kind: 'unreachable', problem: `Could not reach ${url}: ${cause}` };
+  }
 }
 
 // --------------------------------------------------
@@ -1288,6 +1335,18 @@ async function commandRun(args: ParsedArgs): Promise<number> {
   log.info(`Requirements : ${config.requirements.length}`);
   log.info(`Output       : ${paths.outputDir}`);
 
+  // Fail fast, with the right exit code: "staging is down" must never
+  // reach the gate and come out as "this release is unsafe".
+  const reach = await checkReachability(config);
+
+  if (reach.kind === 'unreachable') {
+    throw new UnreachableError(reach.problem!, 'Check the environment is up; qyntra doctor shows details.');
+  }
+
+  if (reach.kind === 'misconfigured') {
+    throw new ConfigError(reach.problem!);
+  }
+
   // Before discovery: an app that requires login shows an anonymous
   // visitor only the login page.
   await loginIfConfigured(config);
@@ -1308,7 +1367,12 @@ async function commandRun(args: ParsedArgs): Promise<number> {
       'Discovery failed; Qyntra cannot reason about an application it ' +
         'could not load.'
     );
-    return discoveryStatus;
+
+    // A Qyntra crash keeps its own code; anything else is the app not
+    // loading — never exit 1, which means "the gate blocked a release".
+    return discoveryStatus === EXIT_INTERNAL_ERROR
+      ? EXIT_INTERNAL_ERROR
+      : EXIT_APPLICATION_UNREACHABLE;
   }
 
   // What this release changed in the code. Before risk, which uses it.

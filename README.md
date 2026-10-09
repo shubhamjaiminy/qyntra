@@ -916,7 +916,10 @@ Stable across releases — branch on them in CI.
 | `5`  | Login to the application failed |
 | `70` | Internal error (a Qyntra bug) |
 
-A broken pipeline never looks like a clean "unsafe" verdict.
+A broken pipeline never looks like a clean "unsafe" verdict: `run` checks
+the application is reachable before it starts, so a staging outage exits
+`4` — never `1` — and a `404` on `app.baseUrl` exits `2`. A login page
+that answers but never finishes loading names the files still loading.
 
 ---
 

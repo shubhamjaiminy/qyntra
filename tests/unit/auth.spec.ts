@@ -113,3 +113,20 @@ test('a login page that never finishes loading names what is stuck', async () =>
     /answered HTTP 200, but did not finish loading.*never\.js/
   );
 });
+
+test('two-step login (email, Continue, then password) works with the same config', async () => {
+  credentials();
+
+  const result = await authenticate(config({ loginUrl: `${app.url}/login-two-step` }));
+
+  expect(result.landedUrl).toBe(`${app.url}/dashboard`);
+});
+
+test('two-step login with a wrong password is rejected', async () => {
+  credentials('wrong');
+
+  await expect(authenticate(config({ loginUrl: `${app.url}/login-two-step` }))).rejects.toThrow(
+    /Invalid email or password/
+  );
+});
+

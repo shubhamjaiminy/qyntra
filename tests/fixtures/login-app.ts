@@ -78,6 +78,59 @@ export async function startLoginApp(
       return send(200, loginForm());
     }
 
+    // Two-step, like Auth0 / Okta / Google: email first, then password.
+    if (url.pathname === '/login-two-step' && request.method === 'POST') {
+      let raw = '';
+      request.on('data', (chunk) => (raw += chunk));
+      request.on('end', () => {
+        const form = new URLSearchParams(raw);
+        const email = form.get('email') ?? '';
+
+        if (!form.has('password')) {
+          return send(
+            200,
+            page(
+              'Sign in · Acme',
+              `<h1>Enter your password</h1>
+               <form method="post" action="/login-two-step">
+                 <input type="hidden" name="email" value="${email.replace(/"/g, '&quot;')}">
+                 <label>Password <input id="password" name="password" type="password"></label>
+                 <button type="submit">Sign in</button>
+               </form>`
+            )
+          );
+        }
+
+        if (email === LOGIN_EMAIL && form.get('password') === LOGIN_PASSWORD) {
+          const id = randomBytes(16).toString('hex');
+          sessions.add(id);
+          return send(303, '', { location: '/dashboard', 'set-cookie': `session=${id}; HttpOnly; Path=/; SameSite=Lax` });
+        }
+
+        send(200, loginForm('Invalid email or password'));
+      });
+      return;
+    }
+
+    if (url.pathname === '/login-two-step') {
+      return send(
+        200,
+        page(
+          'Sign in · Acme',
+          `<h1>Sign in</h1>
+           <form method="post" action="/login-two-step">
+             <label>Email <input id="email" name="email" type="email"></label>
+             <button type="submit">Continue</button>
+           </form>`
+        )
+      );
+    }
+
+    // An unhealthy environment.
+    if (url.pathname === '/broken') {
+      return send(500, page('Error', '<h1>Internal Server Error</h1>'));
+    }
+
     // A login page whose blocking script never arrives.
     if (url.pathname === '/hang') {
       return send(200, page('Sign in', '<script src="/never.js"></script>' + loginForm()));
