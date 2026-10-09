@@ -183,8 +183,15 @@ function anonymousTest(call: ApiCall, title: string): string {
 
   return `
 test(${literal(title)}, async ({ playwright }) => {
-  // A fresh context: no session cookies, no Authorization header.
-  const anonymous = await playwright.request.newContext();
+  // Explicitly empty: inside a test, newContext() inherits the file's
+  // test.use({ storageState }) — the logged-in session — so without
+  // this the "anonymous" request would carry the login cookie and pass
+  // against an endpoint that is wide open.
+  const anonymous = await playwright.request.newContext({
+    storageState: { cookies: [], origins: [] },
+    extraHTTPHeaders: {},
+    httpCredentials: undefined,
+  });
 
   try {
     const response = await anonymous.${call.method.toLowerCase()}(ENDPOINT);

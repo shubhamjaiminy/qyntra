@@ -128,7 +128,10 @@ test.describe('api test generation', () => {
       'GET /api/articles responds with the observed contract',
       'GET /api/articles refuses anonymous access',
     ]);
-    expect(spec.source).toContain('playwright.request.newContext()');
+    // Explicitly empty: a bare newContext() inherits test.use({ storageState })
+    // and would send the login cookie, passing against an open endpoint.
+    expect(spec.source).toContain('storageState: { cookies: [], origins: [] }');
+    expect(spec.source).not.toContain('playwright.request.newContext()');
   });
 
   test('a header-token call is only tested for anonymous refusal', () => {

@@ -30,6 +30,7 @@ import {
 
 import type { AuthConfig, QyntraConfig } from './config';
 import { AuthenticationError, ConfigError } from './exit-codes';
+import { sanitizeUrl } from './failure-evidence';
 import { redact } from './logger';
 
 /** Env var through which the CLI hands the session to spawned stages. */
@@ -215,10 +216,44 @@ export async function authenticate(
     const context = await browser.newContext(BROWSER_PROFILE);
     const page = await context.newPage();
 
-    await page.goto(loginUrl, {
-      waitUntil: 'domcontentloaded',
-      timeout: timeoutMs,
+    // Requests still in flight, so a page that never finishes loading is
+    // reported as "these files hung", not a bare navigation timeout.
+    const inFlight = new Set<string>();
+    page.on('request', (request) => inFlight.add(request.url()));
+    page.on('requestfinished', (request) => inFlight.delete(request.url()));
+    page.on('requestfailed', (request) => inFlight.delete(request.url()));
+
+    let documentStatus: number | undefined;
+    page.on('response', (response) => {
+      if (response.request().isNavigationRequest()) {
+        documentStatus = response.status();
+      }
     });
+
+    try {
+      await page.goto(loginUrl, {
+        waitUntil: 'domcontentloaded',
+        timeout: timeoutMs,
+      });
+    } catch (error) {
+      if (!/Timeout/i.test((error as Error)?.message ?? '')) {
+        throw error;
+      }
+
+      const stuck = [...inFlight].map((url) => sanitizeUrl(url)).slice(0, 5);
+
+      throw new AuthenticationError(
+        documentStatus === undefined
+          ? `The login page did not respond within ${timeoutMs}ms: ${loginUrl}`
+          : `The login page answered HTTP ${documentStatus}, but did not finish loading within ` +
+              `${timeoutMs}ms. Still loading: ${stuck.join(', ') || 'nothing — a script may be hanging'}`,
+        documentStatus === undefined
+          ? 'Check the URL and that the environment is up (qyntra doctor checks reachability).'
+          : 'Files the page waits for before it is usable never arrived — often a slow CDN, a ' +
+              'blocked asset, or a proxy limiting connections. Open the page in a browser from ' +
+              'this machine; raise discovery.timeoutMs if it is only slow.'
+      );
+    }
 
     const usernameField = page.locator(auth.usernameSelector).first();
     const passwordField = page.locator(auth.passwordSelector).first();
