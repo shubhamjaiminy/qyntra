@@ -417,6 +417,17 @@ async function snapshotOf(page: Page): Promise<{ kind: 'page' | 'dialog'; snapsh
 // EXPLORE
 // --------------------------------------------------
 
+/**
+ * A menu label without the counters apps put next to it: "Cart (0)",
+ * "Inbox 12", "Orders · 3" are the features Cart, Inbox and Orders.
+ */
+export function featureLabel(label: string): string {
+  return label
+    .replace(/\s*[(\[]\s*\d+\+?\s*[)\]]\s*$/, '')
+    .replace(/\s*[·•|]?\s*\d+\+?$/, '')
+    .trim() || label.trim();
+}
+
 /** Menu items that end the session or leave the application. */
 const NOT_A_FEATURE = /log ?out|sign ?out|log ?off|exit|help|support|docs|documentation|privacy|terms/i;
 
@@ -471,7 +482,7 @@ export async function discoverFeatures(options: {
       slugs.add(slug(link.label));
       link.href = key;
       return true;
-    });
+    }).map((link) => ({ ...link, label: featureLabel(link.label) }));
   } finally {
     await browser.close();
   }

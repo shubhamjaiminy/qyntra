@@ -143,7 +143,9 @@ npx qyntra app --concurrency 4</pre></div>`
             (test) => html`<tr><td>${test.title}</td><td>${test.origin === 'probe' ? 'behaviour probe' : 'AI'}</td>
               <td>${test.status === 'verified' ? html`<span class="badge ok">passes</span>` : test.status === 'app-defect' ? html`<span class="badge bad">fails: application</span>` : html`<span class="badge neutral">${test.status}</span>`}${test.reason ? html` <span class="small muted">${test.reason}</span>` : ''}</td></tr>`
           )}</tbody></table>`
-        : html`<p class="muted">${report.counts.verified} of ${report.counts.tests} test(s) verified; ${report.counts.bugs} failing. Test names need the "standard" level.</p>`}
+        : report.counts.tests === 0
+          ? html`<p class="muted">No tests were run.</p>`
+          : html`<p class="muted">${report.counts.verified} of ${report.counts.tests} test(s) verified; ${report.counts.bugs} failing. Test names are uploaded from the "standard" level up.</p>`}
       <h2>Drawbacks</h2>
       ${report.findings?.length
         ? [...report.findings]
@@ -153,7 +155,9 @@ npx qyntra app --concurrency 4</pre></div>`
                 <div class="small muted">${finding.category} · ${finding.source === 'observed' ? 'observed in the browser' : 'AI review — verify before acting'}</div>
                 ${finding.evidence ? html`<p><strong>Evidence:</strong> ${finding.evidence}</p>` : ''}${finding.recommendation ? html`<p><strong>Recommendation:</strong> ${finding.recommendation}</p>` : ''}</div>`
             )
-        : html`<p class="muted">${findingTotal(report)} issue(s). Titles need the "standard" level.</p>`}`,
+        : findingTotal(report) === 0
+          ? html`<p class="muted">None found.</p>`
+          : html`<p class="muted">${findingTotal(report)} issue(s). Their titles are uploaded from the "standard" level up.</p>`}`,
       { session, orgSlug: org.slug }
     );
   });

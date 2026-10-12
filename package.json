@@ -49,7 +49,10 @@
     "demo:feature": "cd demo && tsx ../scripts/cli.ts feature \"Discount Rules\"",
     "cloud": "tsx cloud/server.ts",
     "cloud:build": "tsc -p tsconfig.cloud.json",
-    "cloud:start": "node --no-warnings dist-cloud/cloud/server.js"
+    "cloud:start": "node --no-warnings dist-cloud/cloud/server.js",
+    "demo:live": "tsx demo/live.ts start",
+    "demo:check": "tsx demo/live.ts check",
+    "demo:stop": "tsx demo/live.ts stop"
   },
   "dependencies": {
     "@google/genai": "^2.21.0",

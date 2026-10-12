@@ -16,3 +16,5 @@ demo/tests/generated/
 demo/.demo-mode*
 dist-cloud/
 data/
+demo/.qyntra/cloud.json
+demo/.qyntra/.demo-token

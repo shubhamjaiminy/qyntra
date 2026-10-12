@@ -389,6 +389,7 @@ function overview(context: WebContext, request: Request): Response {
   }
 
   const record = trackRecord(outcomesFor(context.store, project.id), historyEntries(context.store, project.id, { limit: 500 }));
+  const features = context.store.latestFeatureReports(project.id);
   const passRate = latest && latest.total > 0 ? Math.round((latest.passed / latest.total) * 100) : undefined;
 
   return page(
@@ -398,8 +399,12 @@ function overview(context: WebContext, request: Request): Response {
     html`<p class="small"><a href="/o/${org.slug}">${org.name}</a> /</p><h1>${project.name}</h1>
     ${tabs(org, project, 'overview')}
     ${!latest
-      ? html`<div class="card"><h2 style="margin-top:0">Waiting for the first run</h2>
-          <p>Add <code>QYNTRA_TOKEN</code> to CI and the <code>cloud</code> block to <code>.qyntra/config.json</code>. Lost the token? Create one in <a href="/o/${org.slug}/p/${project.slug}/settings">Settings</a>.</p></div>`
+      ? html`${features.length > 0
+          ? html`<div class="card"><h2 style="margin-top:0">${features.length} feature(s) checked</h2>
+              <p>${features.filter((report) => report.bugs > 0).length} with failing behaviour, ${features.filter((report) => report.verdict === 'NOT_READY').length} not ready. <a href="/o/${org.slug}/p/${project.slug}/features">See the feature reports →</a></p></div>`
+          : ''}
+        <div class="card"><h2 style="margin-top:0">${features.length > 0 ? 'Release decisions appear here' : 'Waiting for the first run'}</h2>
+          <p>Every <code>qyntra run</code> or <code>qyntra gate</code> in CI uploads its decision here once <code>QYNTRA_TOKEN</code> and the <code>cloud</code> block are set. Lost the token? Create one in <a href="/o/${org.slug}/p/${project.slug}/settings">Settings</a>.</p></div>`
       : html`<div class="grid">
         <div class="card stat"><div class="label">Latest verdict</div><div class="value">${verdictBadge(latest.verdict)}</div><div class="small muted">${latest.branch ?? ''} · ${relativeTime(latest.received_at)}</div></div>
         <div class="card stat"><div class="label">Quality score</div><div class="value">${latest.quality_score}</div><div class="small muted">confidence ${latest.confidence}</div></div>

@@ -266,5 +266,8 @@ export function startShop(port = DEMO_PORT): Promise<http.Server> {
     response.end(html ?? layout('Not found', '<h1>Not found</h1>'));
   });
 
-  return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve(server)));
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, '127.0.0.1', () => resolve(server));
+  });
 }

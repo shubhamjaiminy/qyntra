@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 import { cleanBody, parseTests, type Finding } from '../../scripts/lib/feature-ai';
-import { locatorCandidates, trimSnapshot, type FeatureObservation } from '../../scripts/lib/feature-explorer';
+import { featureLabel, locatorCandidates, trimSnapshot, type FeatureObservation } from '../../scripts/lib/feature-explorer';
 import { decideFeature, observedFindings, type TestOutcome } from '../../scripts/lib/feature-report';
 import { assertionsOnly, fixtureSource, isInfrastructureError, isValueMismatch, specSource, statements, strictModeFix } from '../../scripts/lib/feature-tests';
 import { isWriteRequest } from '../../scripts/lib/read-only-guard';
@@ -216,6 +216,12 @@ test.describe('feature verdict', () => {
     expect(decideFeature([finding('Medium', 'observed')], verified, true).verdict).toBe('READY_WITH_ISSUES');
   });
 
+  test('without AI, behaviour checks alone earn Medium at most', () => {
+    const probes = decideFeature([], [outcome('verified'), outcome('verified'), outcome('verified')], false);
+    expect(probes.confidence).toBe('Medium');
+    expect(probes.reasons.join(' ')).toContain('Judged by 3 behaviour check(s), without AI');
+  });
+
   test('without AI, or with few verified tests, confidence is Low and says why', () => {
     const noAi = decideFeature([], [], false);
     expect(noAi.confidence).toBe('Low');
@@ -303,5 +309,17 @@ test.describe('vacuity check', () => {
   test('a pure presence check has nothing to strip', () => {
     expect(assertionsOnly("await expect(page.getByRole('grid')).toBeVisible();")).toBeUndefined();
     expect(assertionsOnly("await page.getByRole('button').click();")).toBeUndefined();
+  });
+});
+
+test.describe('feature labels', () => {
+  test('counters next to menu items are not part of the feature name', () => {
+    expect(featureLabel('Cart (0)')).toBe('Cart');
+    expect(featureLabel('Inbox 12')).toBe('Inbox');
+    expect(featureLabel('Orders · 3')).toBe('Orders');
+    expect(featureLabel('Notifications [99+]')).toBe('Notifications');
+    expect(featureLabel('Discount Rules')).toBe('Discount Rules');
+    expect(featureLabel('Top 10 Products')).toBe('Top 10 Products');
+    expect(featureLabel('2024')).toBe('2024');
   });
 });

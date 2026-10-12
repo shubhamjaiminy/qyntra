@@ -247,8 +247,12 @@ export function decideFeature(findings: Finding[], tests: TestOutcome[], aiAvail
     reasons.push(`Test "${defect.title}" fails against the application: ${defect.reason ?? 'behaviour broken'}`);
   }
 
+  // Behaviour probes are evidence without any model: enough of them
+  // earn Medium. High needs the AI steps too (understanding, review).
   const confidence: FeatureVerdictResult['confidence'] = !aiAvailable
-    ? 'Low'
+    ? verified.length >= 3
+      ? 'Medium'
+      : 'Low'
     : verified.length >= 5
       ? 'High'
       : verified.length >= 2
@@ -262,7 +266,11 @@ export function decideFeature(findings: Finding[], tests: TestOutcome[], aiAvail
   }
 
   if (!aiAvailable) {
-    reasons.push('No AI provider was available: the feature was observed but not understood, tested or reviewed.');
+    reasons.push(
+      verified.length >= 3
+        ? `Judged by ${verified.length} behaviour check(s), without AI: the feature was not described or reviewed.`
+        : 'No AI provider was available: the feature was observed but not understood, tested or reviewed.'
+    );
   } else if (verified.length < 2) {
     reasons.push(`Only ${verified.length} test(s) could be verified, so behaviour coverage is thin.`);
   }
