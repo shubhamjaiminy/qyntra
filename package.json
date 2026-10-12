@@ -1,7 +1,7 @@
 {
   "name": "qyntra",
   "version": "0.1.0",
-  "description": "AI Quality Engineer — turns requirements into executable tests, explains failures, and decides whether a release is safe.",
+  "description": "AI Quality Engineer \u2014 turns requirements into executable tests, explains failures, and decides whether a release is safe.",
   "license": "UNLICENSED",
   "private": true,
   "bin": {
@@ -40,7 +40,16 @@
     "generate:test": "tsx scripts/test-generator.ts",
     "analyze:risk": "tsx scripts/risk-analyzer.ts",
     "discover": "tsx scripts/application-discovery.ts",
-    "map:scenarios": "tsx scripts/scenario-mapper.ts"
+    "map:scenarios": "tsx scripts/scenario-mapper.ts",
+    "demo:app": "tsx demo/demo.ts start",
+    "demo:mode": "tsx demo/demo.ts mode",
+    "demo:reset": "tsx demo/demo.ts reset",
+    "demo:qyntra": "cd demo && tsx ../scripts/cli.ts",
+    "demo:benchmark": "tsx demo/benchmark.ts",
+    "demo:feature": "cd demo && tsx ../scripts/cli.ts feature \"Discount Rules\"",
+    "cloud": "tsx cloud/server.ts",
+    "cloud:build": "tsc -p tsconfig.cloud.json",
+    "cloud:start": "node --no-warnings dist-cloud/cloud/server.js"
   },
   "dependencies": {
     "@google/genai": "^2.21.0",

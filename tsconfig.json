@@ -6,13 +6,22 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "types": ["node", "@playwright/test"],
+    "types": [
+      "node",
+      "@playwright/test"
+    ],
     "outDir": "dist"
   },
   "include": [
     "tests/**/*.ts",
     "scripts/**/*.ts",
     "playwright.config.ts",
-    "playwright.unit.config.ts"
+    "playwright.unit.config.ts",
+    "demo/**/*.ts",
+    "cloud/**/*.ts"
+  ],
+  "exclude": [
+    "**/qyntra-out*/**",
+    "demo/tests/generated/**"
   ]
 }

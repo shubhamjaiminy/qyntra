@@ -1,0 +1,19 @@
+{
+  "app": {
+    "name": "Acme Shop",
+    "baseUrl": "http://localhost:4173"
+  },
+  "requirements": [
+    "User can add products to the cart and check out"
+  ],
+  "output": { "dir": "qyntra-out" },
+  "discovery": { "explore": true, "maxActions": 15, "timeoutMs": 20000 },
+  "execution": {
+    "generatedDir": "tests/generated",
+    "include": ["tests/shop.spec.ts"]
+  },
+  "ai": { "provider": "ollama", "model": "qwen2.5-coder:7b" },
+  "remediation": { "enabled": true, "maxRepairs": 3 },
+  "performance": { "enabled": false },
+  "change": { "enabled": false }
+}

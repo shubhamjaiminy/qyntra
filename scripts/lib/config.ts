@@ -13,6 +13,7 @@
 import fs from 'fs';
 import path from 'path';
 
+import { UPLOAD_LEVELS, type UploadLevel } from './cloud-upload';
 import { ConfigError } from './exit-codes';
 import {
   ALL_PROBES,
@@ -255,6 +256,19 @@ export interface ChangeConfig {
   base?: string;
 }
 
+/**
+ * Qyntra Cloud. Absent: nothing is ever uploaded. The token is read
+ * from QYNTRA_TOKEN, never from this file.
+ */
+export interface CloudConfig {
+  /** Qyntra Cloud base URL; QYNTRA_CLOUD_URL overrides it. */
+  url?: string;
+  project?: string;
+  upload: UploadLevel;
+  /** Read run history from the cloud, so CI needs no history cache. */
+  history: boolean;
+}
+
 export interface QyntraConfig {
   app: AppConfig;
   requirements: string[];
@@ -268,6 +282,7 @@ export interface QyntraConfig {
   performance: PerformanceConfig;
   change: ChangeConfig;
   llm: LlmConfig;
+  cloud: CloudConfig;
 
   /** Absolute path of the loaded config file, if any. */
   readonly configPath?: string;
@@ -351,6 +366,11 @@ function defaults(rootDir: string): QyntraConfig {
 
     llm: {
       features: [],
+    },
+
+    cloud: {
+      upload: 'standard',
+      history: false,
     },
 
     rootDir,
@@ -866,8 +886,66 @@ export function loadConfig(
       };
     })(),
 
+    cloud: resolveCloudConfig(merged.cloud),
+
     configPath,
     rootDir,
+  };
+}
+
+export function resolveCloudConfig(raw: unknown): CloudConfig {
+  const cloud = isPlainObject(raw) ? raw : {};
+
+  for (const forbidden of ['token', 'apiKey', 'secret']) {
+    if (forbidden in cloud) {
+      throw new ConfigError(
+        `Config field "cloud.${forbidden}" is not allowed.`,
+        'Qyntra reads the cloud token from the QYNTRA_TOKEN environment variable, because this file gets committed.'
+      );
+    }
+  }
+
+  const upload = cloud.upload ?? 'standard';
+
+  if (!(UPLOAD_LEVELS as readonly unknown[]).includes(upload)) {
+    throw new ConfigError(
+      `cloud.upload must be one of: ${UPLOAD_LEVELS.join(', ')}`,
+      'metrics sends counts only; standard adds test names and commits; full adds error messages and repair diffs.'
+    );
+  }
+
+  let url: string | undefined;
+
+  if (cloud.url !== undefined) {
+    url = assertNonEmptyString(cloud.url, 'cloud.url', 'Your Qyntra Cloud address, e.g. "https://app.qyntra.dev".').replace(/\/+$/, '');
+    let parsed: URL;
+
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw new ConfigError(`cloud.url is not a URL: ${url}`);
+    }
+
+    // Tokens travel in this request's header: never in clear text,
+    // except to a server on this machine.
+    if (parsed.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(parsed.hostname)) {
+      throw new ConfigError(`cloud.url must use https:// (got ${url}).`, 'Only a server on localhost may use http://.');
+    }
+  }
+
+  return {
+    upload: upload as UploadLevel,
+    history: cloud.history === true,
+    ...(url ? { url } : {}),
+    ...(cloud.project !== undefined
+      ? {
+          project: assertNonEmptyString(
+            cloud.project,
+            'cloud.project',
+            'The project name in Qyntra Cloud, e.g. "acme-billing".'
+          ),
+        }
+      : {}),
   };
 }
 

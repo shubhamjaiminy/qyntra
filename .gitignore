@@ -8,3 +8,11 @@ qyntra-out*/
 .env.local
 .DS_Store
 .qyntra/.auth/
+
+# Live demo state
+demo/.demo-mode
+demo/tests/generated/
+.qyntra/anchor.json
+demo/.demo-mode*
+dist-cloud/
+data/

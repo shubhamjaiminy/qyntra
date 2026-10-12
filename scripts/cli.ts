@@ -33,6 +33,7 @@ import {
 import {
   artifactPaths,
   ensureOutputDir,
+  readArtifact,
   readOptionalArtifact,
   writeArtifact,
   type ArtifactPaths,
@@ -88,6 +89,37 @@ import {
   type OutcomeResult,
   type OutcomeSeverity,
 } from './lib/release-outcomes';
+import {
+  buildPilotReport,
+  formatPilotReportMarkdown,
+  type PilotAnalysisInput,
+} from './lib/pilot-report';
+import type { RemediationArtifact } from './repair';
+import { runFeature } from './lib/feature-run';
+import { runApp } from './lib/app-run';
+import {
+  UPLOAD_LEVELS,
+  buildFeatureUploadPayload,
+  buildUploadPayload,
+  pullRequestFromEnv,
+  type FeatureUploadInput,
+  type UploadInputs,
+  type UploadLevel,
+  type UploadPayload,
+} from './lib/cloud-upload';
+import {
+  cloudTarget,
+  fetchHistory,
+  isTarget,
+  mergeHistory,
+  ping,
+  sendFeatureReport,
+  sendOutcome,
+  sendRun,
+  TOKEN_ENV,
+} from './lib/cloud-client';
+import { pullRequestTarget, upsertComment } from './lib/github';
+import { detectOutcomes, OUTCOME_WINDOW_HOURS, readGitLog, releaseBranch } from './lib/outcome-detection';
 
 import {
   authenticate,
@@ -407,11 +439,28 @@ async function commandInit(args: ParsedArgs): Promise<number> {
   fs.mkdirSync(path.dirname(target), { recursive: true });
 
   const detected = await detectAIProvider();
+  const starter: Record<string, unknown> = JSON.parse(JSON.stringify({ ...STARTER_CONFIG, ai: detected.ai }));
+  const app = starter.app as Record<string, unknown>;
 
-  fs.writeFileSync(
-    target,
-    JSON.stringify({ ...STARTER_CONFIG, ai: detected.ai }, null, 2) + '\n'
-  );
+  // Flags the dashboard's setup page hands out, so onboarding is one paste:
+  //   qyntra init --url https://staging.acme.example --cloud-url https://app.qyntra.dev --project billing
+  const appUrl = flagString(args.flags, 'url');
+  if (appUrl) {
+    app.baseUrl = appUrl.replace(/\/+$/, '');
+    if (app.auth) (app.auth as Record<string, unknown>).loginUrl = `${app.baseUrl}/login`;
+  }
+
+  if (flagString(args.flags, 'name')) app.name = flagString(args.flags, 'name');
+  if (args.flags['no-auth'] === true) delete app.auth;
+
+  const cloudUrl = flagString(args.flags, 'cloud-url');
+  const project = flagString(args.flags, 'project');
+
+  if (cloudUrl && project) {
+    starter.cloud = { url: cloudUrl.replace(/\/+$/, ''), project, upload: 'standard', history: true };
+  }
+
+  fs.writeFileSync(target, JSON.stringify(starter, null, 2) + '\n');
 
   log.info(`Created ${target}`);
   log.info(`AI provider: ${String(detected.ai.provider)} — ${detected.why}`);
@@ -421,9 +470,13 @@ async function commandInit(args: ParsedArgs): Promise<number> {
   if (ignored.length > 0) {
     log.info(`Added to .gitignore: ${ignored.join(', ')}`);
   }
+  if (starter.cloud) {
+    log.info(`Qyntra Cloud: project "${project}" at ${cloudUrl} — set ${TOKEN_ENV} as a CI secret`);
+  }
+
   log.blank();
   log.info('Next steps:');
-  log.info('  1. Set app.baseUrl to your staging environment.');
+  log.info(appUrl ? `  1. Check app.baseUrl (${appUrl}).` : '  1. Set app.baseUrl to your staging environment.');
   log.info('  2. List the requirements you want covered.');
   log.info('  3. Remove app.auth if the app needs no login; otherwise export its credentials.');
   log.info('  4. Run: npx qyntra doctor');
@@ -667,6 +720,26 @@ async function commandDoctor(args: ParsedArgs): Promise<number> {
     unreachable = reach.problem;
   } else if (reach.kind === 'misconfigured') {
     problems.push(reach.problem!);
+  }
+
+  // Qyntra Cloud: optional, but a configured one must work.
+  const cloud = cloudTarget(config);
+
+  if (isTarget(cloud)) {
+    const answer = await ping(cloud);
+
+    if (answer.ok) {
+      log.info(`Qyntra Cloud  : ${cloud.url} — project ${answer.body?.org}/${answer.body?.project}, plan ${answer.body?.plan}, accepts up to "${answer.body?.uploadLevel}"`);
+
+      const allowed = answer.body?.uploadLevel ?? 'standard';
+      if (UPLOAD_LEVELS.indexOf(config.cloud.upload) > UPLOAD_LEVELS.indexOf(allowed as UploadLevel)) {
+        problems.push(`cloud.upload is "${config.cloud.upload}" but the project accepts at most "${allowed}"; uploads will be refused.`);
+      }
+    } else {
+      problems.push(`Qyntra Cloud at ${cloud.url} refused the token (${answer.error}). Check ${TOKEN_ENV} and cloud.project.`);
+    }
+  } else if (config.cloud.project || config.cloud.url) {
+    log.info(`Qyntra Cloud  : not active — missing ${cloud.missing.join(', ')}`);
   }
 
   log.blank();
@@ -1065,13 +1138,15 @@ function recordRun(
   }
 }
 
-function commandGate(args: ParsedArgs): number {
+async function commandGate(args: ParsedArgs): Promise<number> {
   const config = configFrom(args);
   const paths = artifactPaths(config);
 
   ensureOutputDir(paths);
 
   stage('RELEASE INTELLIGENCE');
+
+  await pullCloudHistory(config, paths);
 
   const decision = buildDecision(config, paths);
 
@@ -1105,6 +1180,10 @@ function commandGate(args: ParsedArgs): number {
       );
     }
   }
+
+  // Sharing never changes the verdict or the exit code.
+  const cloudUrl = await shareRun(config, paths);
+  await commentOnPullRequest(config, decision, cloudUrl);
 
   return decision.verdict === 'UNSAFE'
     ? EXIT_QUALITY_GATE_FAILED
@@ -1203,11 +1282,71 @@ function stringFlag(args: ParsedArgs, name: string): string | undefined {
  *                  [--note "..."] [--date 2026-10-01]
  *   qyntra outcome --list
  */
-function commandOutcome(args: ParsedArgs): number {
+/**
+ * `qyntra outcome --detect`: outcomes from git history for every
+ * judged release on the release branch. Run it on a schedule (daily in
+ * CI) and the track record fills itself.
+ */
+async function detectAndRecordOutcomes(config: QyntraConfig, paths: ArtifactPaths, args: ParsedArgs): Promise<number> {
+  const days = Number(stringFlag(args, 'days') ?? 30);
+  const branch = stringFlag(args, 'branch') ?? releaseBranch(config.rootDir);
+
+  if (!Number.isInteger(days) || days < 1 || days > 365) {
+    throw new ConfigError('--days must be a whole number from 1 to 365.');
+  }
+
+  // Judged releases: local history, plus the cloud's when it is on.
+  let runs = readHistory(paths.runHistory).runs;
+  const cloud = cloudTarget(config);
+
+  if (isTarget(cloud)) {
+    const remote = await fetchHistory(cloud, branch, 500);
+    if (remote.ok && remote.body) runs = mergeHistory({ version: 1, runs }, remote.body.runs, 1_000).runs;
+  }
+
+  const { detected, pending } = detectOutcomes({
+    commits: readGitLog(config.rootDir, days),
+    runs,
+    existing: readOutcomes(paths.releaseOutcomes).outcomes,
+    branch,
+  });
+
+  for (const outcome of detected) {
+    recordOutcome(paths.releaseOutcomes, {
+      commit: outcome.commit,
+      result: outcome.result,
+      note: `detected: ${outcome.evidence}`,
+      occurredAt: outcome.occurredAt,
+      recordedAt: new Date().toISOString(),
+    });
+
+    if (isTarget(cloud)) {
+      await sendOutcome(cloud, { commit: outcome.commit, result: outcome.result, occurredAt: outcome.occurredAt });
+    }
+
+    log.info(`${outcome.commit.slice(0, 7)}  ${outcome.result.padEnd(8)} ${outcome.evidence}`);
+  }
+
+  log.blank();
+  log.info(`Detected : ${detected.length} outcome(s) on ${branch} in the last ${days} day(s)`);
+  log.info(`Pending  : ${pending.length} release(s) still inside the ${OUTCOME_WINDOW_HOURS}h window`);
+
+  if (detected.length > 0) {
+    log.info(`Commit ${path.relative(config.rootDir, paths.releaseOutcomes)} so the team and CI see them.`);
+  }
+
+  return EXIT_OK;
+}
+
+async function commandOutcome(args: ParsedArgs): Promise<number> {
   const config = configFrom(args);
   const paths = artifactPaths(config);
 
   stage('RELEASE OUTCOMES');
+
+  if (args.flags.detect === true) {
+    return detectAndRecordOutcomes(config, paths, args);
+  }
 
   if (args.flags.list === true) {
     const outcomes = readOutcomes(paths.releaseOutcomes).outcomes;
@@ -1276,6 +1415,21 @@ function commandOutcome(args: ParsedArgs): number {
     occurredAt: occurredAt.toISOString(),
     recordedAt: new Date().toISOString(),
   });
+
+  const cloud = cloudTarget(config);
+
+  if (isTarget(cloud)) {
+    const sent = await sendOutcome(cloud, {
+      commit,
+      result,
+      ...(severity && result !== 'ok' ? { severity } : {}),
+      ...(stringFlag(args, 'area') ? { area: stringFlag(args, 'area') } : {}),
+      occurredAt: occurredAt.toISOString(),
+    });
+
+    if (sent.ok) log.info('Cloud    : outcome recorded in Qyntra Cloud');
+    else log.warn(`Cloud    : not recorded (${sent.error}); the local record is kept.`);
+  }
 
   const judged = [...readHistory(paths.runHistory).runs]
     .reverse()
@@ -1464,7 +1618,7 @@ async function commandRun(args: ParsedArgs): Promise<number> {
   log.debug(`Playwright exit status: ${testRun.status ?? 'unknown'}`);
 
   // Gate first: the dashboard displays the gate's verdict, not its own.
-  const gateStatus = commandGate(args);
+  const gateStatus = await commandGate(args);
 
   runStage('REPORTING', 'generate-dashboard', [], config);
 
@@ -1497,6 +1651,358 @@ async function commandLogin(args: ParsedArgs): Promise<number> {
 }
 
 // --------------------------------------------------
+// COMMAND: pilot-report
+// --------------------------------------------------
+
+/** package.json is one level up from both scripts/ and dist/. */
+function qyntraVersion(): string {
+  const file = path.join(__dirname, '..', 'package.json');
+
+  try {
+    return String(JSON.parse(fs.readFileSync(file, 'utf-8')).version ?? 'unknown');
+  } catch {
+    return 'unknown';
+  }
+}
+
+/**
+ * Summarise the pilot so far, for the partner to send back. Counts and
+ * rates only, so it can be shared without review.
+ */
+function commandPilotReport(args: ParsedArgs): number {
+  const config = configFrom(args);
+  const paths = artifactPaths(config);
+
+  ensureOutputDir(paths);
+
+  stage('PILOT REPORT');
+
+  const report = buildPilotReport({
+    runs: readHistory(paths.runHistory).runs,
+    outcomes: readOutcomes(paths.releaseOutcomes).outcomes,
+    analysis: readOptionalArtifact<PilotAnalysisInput>(paths.aiAnalysis),
+    remediation: readOptionalArtifact<RemediationArtifact>(paths.remediation),
+    provider: describeProvider(config.ai),
+    qyntraVersion: qyntraVersion(),
+  });
+
+  const jsonPath = path.join(paths.outputDir, 'pilot-report.json');
+  const markdownPath = path.join(paths.outputDir, 'pilot-report.md');
+  const markdown = formatPilotReportMarkdown(report);
+
+  writeArtifact(jsonPath, report);
+  fs.writeFileSync(markdownPath, markdown);
+
+  process.stdout.write(`\n${markdown}\n`);
+
+  log.info(`Report : ${markdownPath}`);
+  log.info(`Data   : ${jsonPath}`);
+  log.info('Both files are safe to share: they hold no test names, URLs or commits.');
+
+  return EXIT_OK;
+}
+
+// --------------------------------------------------
+// COMMAND: feature
+// --------------------------------------------------
+
+/**
+ * Test one named feature end to end: find it, understand it, write and
+ * verify tests, review it, and decide whether it is ready. Read-only
+ * unless --allow-writes. Exit 1 when the verdict is NOT_READY.
+ */
+async function commandFeature(args: ParsedArgs): Promise<number> {
+  const feature = args.positionals[0]?.trim();
+
+  if (!feature) {
+    throw new ConfigError(
+      'Name the feature to test.',
+      'Example: qyntra feature "Fee Rules" --path /app/acme/fee-rules'
+    );
+  }
+
+  // --no-ai: observation and behaviour probes only. Fast (about a
+  // minute), private, and still catches broken search, filters and
+  // validation; skips understanding, AI tests and the AI review.
+  if (args.flags['no-ai'] === true) {
+    process.env.QYNTRA_AI_PROVIDER = 'none';
+  }
+
+  // The feature name is not a requirement; keep it out of configFrom.
+  const config = loadConfig({
+    configPath: flagString(args.flags, 'config'),
+    overrides: { baseUrl: flagString(args.flags, 'url'), outputDir: flagString(args.flags, 'output') },
+  });
+
+  const number = (name: string, fallback: number, max: number) => {
+    const value = Number(flagString(args.flags, name) ?? fallback);
+    if (!Number.isInteger(value) || value < 0 || value > max) {
+      throw new ConfigError(`--${name} must be a whole number from 0 to ${max}.`);
+    }
+    return value;
+  };
+
+  const options = {
+    feature,
+    path: stringFlag(args, 'path'),
+    allowWrites: args.flags['allow-writes'] === true,
+    maxTests: number('max-tests', 8, 20),
+    maxFixes: number('max-fixes', 2, 5),
+  };
+
+  await loginIfConfigured(config);
+
+  stage(`FEATURE: ${feature.toUpperCase()}`);
+
+  const { report, reportFile, jsonFile } = await runFeature(config, options);
+  await shareFeatureReports(config, [jsonFile]);
+  const verified = report.tests.filter((test) => test.status === 'verified').length;
+
+  log.blank();
+  log.info(`Verdict     : ${report.decision.verdict} (confidence ${report.decision.confidence})`);
+  log.info(`Drawbacks   : ${report.findings.length} (${report.findings.filter((finding) => finding.source === 'observed').length} observed, ${report.findings.filter((finding) => finding.source === 'ai-review').length} from AI review)`);
+  log.info(`Tests       : ${verified} of ${report.tests.length} verified`);
+  log.info(`Report      : ${reportFile}`);
+  log.info(`Data        : ${jsonFile}`);
+
+  return report.decision.verdict === 'NOT_READY' ? EXIT_QUALITY_GATE_FAILED : EXIT_OK;
+}
+
+// --------------------------------------------------
+// COMMAND: app
+// --------------------------------------------------
+
+/**
+ * Every feature in the menu, checked like `qyntra feature`, several at
+ * a time. Probes and observation only unless --with-ai. Exit 1 when any
+ * feature is not ready.
+ */
+async function commandApp(args: ParsedArgs): Promise<number> {
+  const config = loadConfig({
+    configPath: flagString(args.flags, 'config'),
+    overrides: { baseUrl: flagString(args.flags, 'url'), outputDir: flagString(args.flags, 'output') },
+  });
+
+  const number = (name: string, fallback: number, min: number, max: number) => {
+    const value = Number(flagString(args.flags, name) ?? fallback);
+    if (!Number.isInteger(value) || value < min || value > max) {
+      throw new ConfigError(`--${name} must be a whole number from ${min} to ${max}.`);
+    }
+    return value;
+  };
+
+  const pattern = (name: string) => {
+    const source = stringFlag(args, name);
+    if (!source) return undefined;
+    try {
+      return new RegExp(source, 'i');
+    } catch {
+      throw new ConfigError(`--${name} is not a valid pattern: ${source}`);
+    }
+  };
+
+  const options = {
+    concurrency: number('concurrency', 2, 1, 8),
+    maxFeatures: number('max-features', 50, 1, 500),
+    include: pattern('include'),
+    exclude: pattern('exclude'),
+    withAi: args.flags['with-ai'] === true,
+    allowWrites: args.flags['allow-writes'] === true,
+  };
+
+  await loginIfConfigured(config);
+
+  stage('APPLICATION');
+
+  const { summary, reportFile } = await runApp(config, options);
+  await shareFeatureReports(
+    config,
+    summary.features.filter((feature) => feature.report).map((feature) => feature.report!.replace(/\.md$/, '.json'))
+  );
+  const bugs = summary.features.reduce((total, feature) => total + feature.bugs.length, 0);
+  const notReady = summary.features.filter((feature) => feature.verdict === 'NOT_READY').length;
+
+  log.blank();
+  log.info(`Features    : ${summary.features.length} checked of ${summary.featuresFound} found`);
+  log.info(`Bugs        : ${bugs} failing behaviour(s) in ${summary.features.filter((feature) => feature.bugs.length > 0).length} feature(s)`);
+  log.info(`Not ready   : ${notReady}`);
+  log.info(`Report      : ${reportFile}`);
+
+  return notReady > 0 ? EXIT_QUALITY_GATE_FAILED : EXIT_OK;
+}
+
+// --------------------------------------------------
+// COMMAND: upload
+// --------------------------------------------------
+
+/**
+ * Show exactly what Qyntra Cloud would receive for the last run. The
+ * cloud is not open yet, so only --dry-run exists: the point today is
+ * that a customer can verify the privacy promise before trusting it.
+ */
+/** The upload for the last decided run, at `level`. */
+function runUpload(config: QyntraConfig, paths: ArtifactPaths, level: UploadLevel): UploadPayload {
+  const decision = readArtifact<UploadInputs['decision'] & { resultsGeneratedAt?: string }>(
+    paths.releaseDecision,
+    'qyntra gate (or qyntra run)'
+  );
+
+  // The history entry for these results, not merely the newest one.
+  const runs = readHistory(paths.runHistory).runs;
+  const run =
+    runs.find((entry) => entry.resultsGeneratedAt && entry.resultsGeneratedAt === decision.resultsGeneratedAt) ??
+    runs[runs.length - 1];
+
+  return buildUploadPayload({
+    level,
+    project: config.cloud.project ?? '(cloud.project not set)',
+    qyntraVersion: qyntraVersion(),
+    provider: describeProvider(config.ai),
+    decision,
+    run,
+    failures: readOptionalArtifact<UploadInputs['failures']>(paths.failures),
+    analysis: readOptionalArtifact<UploadInputs['analysis']>(paths.aiAnalysis),
+    remediation: readOptionalArtifact<RemediationArtifact>(paths.remediation),
+    pullRequest: pullRequestFromEnv(process.env),
+  });
+}
+
+/**
+ * Send the last decision to the cloud, when configured. Returns the
+ * run's dashboard URL. Never throws: the cloud being down is a warning.
+ */
+async function shareRun(config: QyntraConfig, paths: ArtifactPaths): Promise<string | undefined> {
+  const target = cloudTarget(config);
+  if (!isTarget(target)) return undefined;
+
+  try {
+    const result = await sendRun(target, runUpload(config, paths, config.cloud.upload));
+
+    if (result.ok) {
+      log.info(`Cloud         : ${result.body?.url ?? 'uploaded'}`);
+      return result.body?.url;
+    }
+
+    log.warn(`Cloud upload failed (${result.error}). The release decision is unaffected.`);
+  } catch (error) {
+    log.warn(`Cloud upload skipped: ${(error as Error)?.message ?? error}`);
+  }
+
+  return undefined;
+}
+
+/** Feature reports from `feature` and `app`, when the cloud is configured. */
+async function shareFeatureReports(config: QyntraConfig, reportFiles: string[]): Promise<void> {
+  const target = cloudTarget(config);
+  if (!isTarget(target)) return;
+
+  const git = gitContext(config.rootDir);
+
+  for (const file of reportFiles) {
+    const report = readOptionalArtifact<FeatureUploadInput>(file);
+    if (!report) continue;
+
+    const payload = buildFeatureUploadPayload(report, {
+      level: config.cloud.upload,
+      project: target.project,
+      qyntraVersion: qyntraVersion(),
+      commit: git?.commit,
+      branch: git?.branch,
+    });
+
+    const result = await sendFeatureReport(target, payload);
+    if (result.ok) {
+      log.info(`Cloud         : ${report.feature} → ${result.body?.url ?? 'uploaded'}`);
+    } else {
+      log.warn(`Cloud upload of "${report.feature}" failed (${result.error}).`);
+    }
+  }
+}
+
+/** cloud.history: fill local run history from the cloud before deciding. */
+async function pullCloudHistory(config: QyntraConfig, paths: ArtifactPaths): Promise<void> {
+  const target = cloudTarget(config);
+  if (!config.cloud.history || !isTarget(target)) return;
+
+  const result = await fetchHistory(target, gitContext(config.rootDir)?.branch, config.gate.historyRuns);
+
+  if (!result.ok || !result.body) {
+    log.warn(`Could not read run history from the cloud (${result.error}); using local history only.`);
+    return;
+  }
+
+  const merged = mergeHistory(readHistory(paths.runHistory), result.body.runs, config.gate.historyRuns);
+  writeArtifact(paths.runHistory, merged);
+  log.info(`Run history   : ${merged.runs.length} run(s), including ${result.body.runs.length} from the cloud`);
+}
+
+/** The decision as a PR comment, in GitHub Actions with GITHUB_TOKEN. */
+async function commentOnPullRequest(config: QyntraConfig, decision: ReleaseDecision, cloudUrl: string | undefined): Promise<void> {
+  const target = pullRequestTarget(process.env, pullRequestFromEnv(process.env));
+  if (!target) return;
+
+  const markdown = formatDecisionMarkdown(decision, config.app.name) + (cloudUrl ? `\n[Open in Qyntra Cloud](${cloudUrl})\n` : '');
+  const result = await upsertComment(target, markdown);
+
+  if (result.ok) log.info(`Pull request  : ${result.message}`);
+  else log.warn(result.message);
+}
+
+/**
+ * Show exactly what Qyntra Cloud would receive for the last run, or
+ * send it. Sending needs cloud.url, cloud.project and QYNTRA_TOKEN.
+ */
+async function commandUpload(args: ParsedArgs): Promise<number> {
+  const config = configFrom(args);
+  const paths = artifactPaths(config);
+  const level = stringFlag(args, 'level') ?? config.cloud.upload;
+
+  if (!(UPLOAD_LEVELS as readonly string[]).includes(level)) {
+    throw new ConfigError(`--level must be one of: ${UPLOAD_LEVELS.join(', ')}`);
+  }
+
+  const payload = runUpload(config, paths, level as UploadLevel);
+
+  if (args.flags['dry-run'] !== true) {
+    const target = cloudTarget(config);
+
+    if (!isTarget(target)) {
+      throw new ConfigError(
+        `Qyntra Cloud is not configured: missing ${target.missing.join(', ')}.`,
+        'Add "cloud": { "url": "…", "project": "…" } to .qyntra/config.json and set QYNTRA_TOKEN. "qyntra upload --dry-run" shows what would be sent.'
+      );
+    }
+
+    stage('CLOUD UPLOAD');
+
+    const result = await sendRun(target, payload);
+
+    if (!result.ok) {
+      throw new QyntraError(`Upload refused: ${result.error}`, result.status === 401 || result.status === 422 ? EXIT_CONFIG_ERROR : EXIT_INTERNAL_ERROR);
+    }
+
+    log.info(`Uploaded : ${result.body?.url}`);
+    return EXIT_OK;
+  }
+
+  stage('CLOUD UPLOAD (DRY RUN)');
+
+  const previewPath = path.join(paths.outputDir, 'upload-preview.json');
+  writeArtifact(previewPath, payload);
+
+  process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  log.blank();
+  log.info(`Level   : ${level}`);
+  log.info(`Preview : ${previewPath}`);
+  log.info(
+    'Never sent at any level: source files, screenshots, traces, DOM ' +
+      'snapshots, request bodies, the application name or its URL.'
+  );
+
+  return EXIT_OK;
+}
+
+// --------------------------------------------------
 // HELP
 // --------------------------------------------------
 
@@ -1507,6 +2013,7 @@ Qyntra — AI Quality Engineer
 
 Usage:
   qyntra init                 Create .qyntra/config.json
+                              [--url <app>] [--no-auth] [--cloud-url <url> --project <slug>]
   qyntra doctor               Validate config, credentials, reachability
   qyntra login                Log in via app.auth and save the session
   qyntra run [requirement]    Full pipeline, ending in a release decision
@@ -1516,6 +2023,18 @@ Usage:
                               --commit <sha> --result ok|incident|rollback|hotfix
                               [--severity High] [--area checkout] [--note "..."]
   qyntra outcome --list       Show recorded outcomes and the gate's track record
+  qyntra outcome --detect     Record outcomes from git: reverts, hotfixes, else ok
+                              [--days 30] [--branch main]
+  qyntra feature "<name>"     Find, understand, test and review one feature
+                              [--path /app/x/fee-rules] [--allow-writes]
+                              [--no-ai] [--max-tests 8] [--max-fixes 2]
+  qyntra app                  Every feature in the menu, checked in parallel
+                              [--concurrency 2] [--max-features 50]
+                              [--include "Rules|Orders"] [--exclude "Reports"]
+                              [--with-ai] [--allow-writes]
+  qyntra pilot-report         Summarise runs, decisions and accuracy to share
+  qyntra upload [--dry-run]   Send the last run to Qyntra Cloud, or show it
+                              [--level metrics|standard|full]
   qyntra help                 Show this message
 
 Options:
@@ -1591,6 +2110,18 @@ async function main(): Promise<number> {
 
     case 'outcome':
       return commandOutcome(args);
+
+    case 'pilot-report':
+      return commandPilotReport(args);
+
+    case 'upload':
+      return commandUpload(args);
+
+    case 'feature':
+      return commandFeature(args);
+
+    case 'app':
+      return commandApp(args);
 
     case 'help':
     case '--help':

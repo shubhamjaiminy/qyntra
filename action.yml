@@ -1,0 +1,52 @@
+name: Qyntra
+description: Release decision for every pull request — behaviour-checked features, explained failures, and a track record.
+author: Qyntra
+branding:
+  icon: shield
+  color: purple
+
+inputs:
+  command:
+    description: "qyntra command: run (default), gate, app, feature, outcome --detect"
+    default: run
+  args:
+    description: Extra arguments, e.g. '--no-ai' or '"Billing" --path /billing'
+    default: ""
+  qyntra-token:
+    description: Qyntra Cloud project token (secrets.QYNTRA_TOKEN). Optional.
+    default: ""
+  github-token:
+    description: Token for the pull request comment. Pass secrets.GITHUB_TOKEN and grant pull-requests write.
+    default: ""
+  gemini-api-key:
+    description: Optional Gemini key for AI analysis. Without any key the deterministic analyzer and behaviour probes still run.
+    default: ""
+  working-directory:
+    description: Directory containing .qyntra/config.json
+    default: "."
+
+runs:
+  using: composite
+  steps:
+    - name: Install Playwright browser
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: npx playwright install --with-deps chromium
+
+    - name: Qyntra ${{ inputs.command }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        QYNTRA_TOKEN: ${{ inputs.qyntra-token }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GEMINI_API_KEY: ${{ inputs.gemini-api-key }}
+        QYNTRA_AI_PROVIDER: ${{ inputs.gemini-api-key != '' && 'gemini' || '' }}
+      run: npx qyntra ${{ inputs.command }} ${{ inputs.args }}
+
+    - name: Keep the report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: qyntra-report
+        path: ${{ inputs.working-directory }}/qyntra-out/
+        if-no-files-found: ignore

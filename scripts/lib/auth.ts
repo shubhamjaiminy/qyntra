@@ -325,7 +325,10 @@ export async function authenticate(
       .waitForLoadState('networkidle', { timeout: 10_000 })
       .catch(() => undefined);
 
-    await context.storageState({ path: statePath });
+    // indexedDB: Firebase Auth, and other SPA auth SDKs, keep the
+    // session there rather than in cookies or localStorage. Without it
+    // the saved session restores as logged out.
+    await context.storageState({ path: statePath, indexedDB: true });
 
     // Owner-only: this file is a working session for the customer's app.
     fs.chmodSync(statePath, 0o600);

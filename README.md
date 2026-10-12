@@ -6,8 +6,10 @@ Playwright tests, explains failures, distinguishes broken tests from real
 product defects, and produces an auditable release decision.
 
 Qyntra runs as a dev dependency inside your repository and executes in
-your CI. No Qyntra-operated servers, no agents, and your source code and
-test data never leave your environment.
+your CI. No agents, and your source code and test data never leave your
+environment. Connect [Qyntra Cloud](#qyntra-cloud) for history,
+dashboards and alerts, and it receives run summaries only — at a level
+you choose.
 
 ---
 
@@ -836,6 +838,18 @@ so a CI retry cannot flip a release decision.
 
 ## CI integration
 
+The quickest setup is the workflow in `docs/ci/qyntra.yml`: the Qyntra
+action on every pull request (decision, PR comment, cloud upload), and a
+daily job that detects release outcomes from git:
+
+```bash
+npx qyntra outcome --detect     # reverts → rollback, hotfix merges → hotfix, 72h quiet → ok
+```
+
+Outcomes recorded by hand are never overwritten; incidents that never
+touched git still need `qyntra outcome --result incident`. The manual
+workflow below shows every step the action takes.
+
 ```yaml
 name: Qyntra
 on: [pull_request]
@@ -932,6 +946,10 @@ that answers but never finishes loading names the files still loading.
 | `qyntra gate` | Release decision from existing artifacts |
 | `qyntra repair [--apply]` | Propose and verify fixes for broken tests; `--apply` writes them |
 | `qyntra outcome ...` | Record what happened after a release; `--list` shows the track record |
+| `qyntra app` | Every feature in the menu, checked in parallel, one summary |
+| `qyntra feature "<name>"` | Find one feature, understand it, write and verify tests, review it, decide if it is ready |
+| `qyntra pilot-report` | Summarise runs, decisions, accuracy and repairs as counts only, safe to share |
+| `qyntra upload [--dry-run]` | Send the last run to Qyntra Cloud, or show exactly what would be sent |
 
 `gate` is separate from `run` so you can compute the verdict in a later
 CI job — commonly a required status check after the test job.
@@ -945,9 +963,182 @@ credentials are redacted from log lines.
 
 ---
 
+## Testing one feature
+
+```bash
+npx qyntra feature "Fee Rules"                          # find it in the menu
+npx qyntra feature "Fee Rules" --path /app/zoo/fee-rules # or go straight there
+```
+
+Qyntra logs in, finds the feature, and then, with no one guiding it:
+
+1. **Explores** the feature page and opens its views — forms, dialogs,
+   filters, column pickers — taking a snapshot and screenshot of each,
+   and recording every locator that matches exactly one element.
+2. **Understands** it: purpose, who uses it, fields, the rules the
+   screens imply, and how to use it, step by step.
+3. **Writes Playwright tests** from the verified locators, runs them,
+   applies Playwright's own exact-locator suggestions, asks the AI to fix
+   what still fails, and keeps only tests that pass twice.
+4. **Probes behaviour** with rules any application must follow, and
+   generates a test for each — by code, not by the AI, so it cannot be
+   watered down into passing:
+   - *search*: typing a word from one row leaves fewer rows, all
+     containing it (search boxes hidden behind a "Search" button are
+     opened first);
+   - *filter*: choosing "Active" leaves only rows with a cell "Active" —
+     native selects and custom (ARIA) dropdowns such as MUI's;
+   - *sorting*: clicking a sortable column header sorts it, and a second
+     click reverses it — numbers, money, percentages, dates and text;
+   - *pagination*: "Next" shows different rows, "Previous" brings the
+     first ones back;
+   - *validation*: an empty form is rejected (or its submit stays
+     disabled), and so are an out-of-range number — 150 in a % field, −5
+     in an amount — and an invalid email. Rejected means a visible error,
+     or the browser's own validation blocking the submit; a form marked
+     `novalidate` must reject it itself.
+   A probe that fails twice is a bug in the application. A probe that
+   cannot run on the page is dropped, never reported.
+5. **Reviews** it for drawbacks a user or the business would hit.
+6. **Decides**: *ready*, *ready with issues*, or *not ready*.
+
+The report, `qyntra-out/features/<feature>/report.md`, separates what
+was **observed in the browser** (HTTP errors, GraphQL errors, slow
+rendering, controls and fields with no accessible name, broken menu
+links, calls to `localhost`) from the **AI's review of the screens**,
+which is labelled "verify before acting". Only observed facts and
+failing tests can make a feature *not ready*; an AI opinion cannot.
+
+**Read-only by default, enforced at the network.** Every request from
+exploration and from the generated tests is checked: GraphQL mutations
+and REST `POST`/`PUT`/`PATCH`/`DELETE` are aborted before they leave the
+machine, and listed in the report. GraphQL queries and identity-provider
+token refreshes go through. `--allow-writes` turns this off, for
+sandboxes you are allowed to change.
+
+The verified tests are kept in `features/<feature>/suite/` with their
+own config, and run without Qyntra:
+
+```bash
+npx playwright test -c qyntra-out/features/fee-rules/suite/feature.config.cjs
+```
+
+`--no-ai` runs only the observation and the behaviour probes: about a
+minute, nothing sent to any model, and it still catches broken search,
+filters and validation.
+
+A test that could not run because the network dropped is reported as
+*not run*, never as a failed test. AI-written tests that still pass
+with their actions removed are dropped as vacuous, and every kept test
+is retitled by what its code actually checks. `--max-tests` (default 8) and
+`--max-fixes` (default 2) bound the work. Exit code `1` means *not
+ready*.
+
+Larger models write better tests. A local 7B model works, but expect
+more tests set aside than with Gemini or a 14B+ local model.
+
+### Every feature at once
+
+```bash
+npx qyntra app                          # every feature in the menu, 2 at a time
+npx qyntra app --concurrency 4 --include "Rules|Orders" --exclude "Reports"
+```
+
+Qyntra logs in once, reads the menu, drops logout, help and off-site
+links, and checks each feature as `qyntra feature` would — behaviour
+probes and browser observation, no AI, about a minute a feature.
+`--with-ai` adds understanding, AI tests and review per feature, at many
+times the cost. One feature failing to load never loses the others.
+
+`qyntra-out/app-report.md` leads with **bugs** — behaviour that fails —
+then lists every feature with its verdict, observed issues by severity,
+and a link to its own report. Exit code `1` when any feature is not
+ready.
+
+---
+
+## Qyntra Cloud
+
+Tests keep running in your CI. Qyntra Cloud receives only results and
+adds what a single CI run cannot: history that survives the workspace,
+a dashboard per project and across projects, flaky-test tracking, the
+release track record, feature and app reports over time, team members,
+Slack alerts and pull request comments.
+
+Create a project in the dashboard, save its token as the CI secret
+`QYNTRA_TOKEN`, and add to `.qyntra/config.json`:
+
+```json
+"cloud": { "url": "https://app.qyntra.dev", "project": "acme-billing", "upload": "standard", "history": true }
+```
+
+From then on:
+
+| Command | Sends |
+| ------- | ----- |
+| `qyntra gate`, `qyntra run` | The run's release decision |
+| `qyntra feature`, `qyntra app` | Each feature report |
+| `qyntra outcome` | What happened after a release |
+| `qyntra upload` | The last run, on demand |
+
+`"history": true` makes `gate` read run history from the cloud before
+deciding, so flakiness detection works without a CI cache step.
+`qyntra doctor` checks the token and the project's upload level. An
+upload that fails is a warning in the log: it never fails the job and
+never changes the decision.
+
+What is uploaded is set per project, and the server refuses anything
+richer than the project allows:
+
+| Level | Adds |
+| ----- | ---- |
+| `metrics` | Verdict, score, confidence and counts. No names or text |
+| `standard` | Commit, branch, PR number, test names and statuses, blocking reasons and warnings, finding titles |
+| `full` | Error messages (truncated), AI diagnoses, verified repair diffs, finding evidence, the AI's description of each feature |
+
+No level includes source files, screenshots, traces, DOM snapshots,
+request bodies, or the application's name. URLs in any text are cut
+down to their origin, and credential-like values are masked. The token
+is read from `QYNTRA_TOKEN`; a token in the config file is rejected.
+
+Check it yourself before trusting it:
+
+```bash
+npx qyntra upload --dry-run                  # the configured level
+npx qyntra upload --dry-run --level metrics  # compare levels
+```
+
+### Pull request comments
+
+In GitHub Actions, `qyntra gate` posts the decision on the pull request
+— one comment, updated on every push — when the step has the job's
+token and permission:
+
+```yaml
+permissions:
+  pull-requests: write
+# …
+      - run: npx qyntra run
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          QYNTRA_TOKEN: ${{ secrets.QYNTRA_TOKEN }}
+```
+
+`QYNTRA_PR_COMMENT=0` turns it off. No GitHub App to install.
+
+### Self-hosting
+
+Qyntra Cloud is one Node.js process and one SQLite file:
+`npm run cloud` locally, or `Dockerfile.cloud` anywhere. See
+`docs/saas/DEPLOY.md`.
+
+---
+
 ## What leaves your environment
 
-Nothing, except calls to your configured LLM provider. With
+Nothing, except calls to your configured LLM provider and — only if you
+configure it — run summaries to [Qyntra Cloud](#qyntra-cloud), at the
+level you choose. With
 `"ai": { "provider": "ollama" }` the model runs on your own machine, and
 with `"provider": "none"` Qyntra uses its deterministic analyzer; either
 way Qyntra makes no external AI calls at all.

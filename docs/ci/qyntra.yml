@@ -1,0 +1,53 @@
+# Copy to .github/workflows/qyntra.yml
+name: Qyntra
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 6 * * *"   # daily: detect release outcomes from git
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  decide:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - uses: shubhamjaiminy/Qyntra@main
+        with:
+          command: run
+          qyntra-token: ${{ secrets.QYNTRA_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
+        env:
+          QYNTRA_APP_USER: ${{ secrets.QYNTRA_APP_USER }}
+          QYNTRA_APP_PASSWORD: ${{ secrets.QYNTRA_APP_PASSWORD }}
+
+  outcomes:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npx qyntra outcome --detect
+        env:
+          QYNTRA_TOKEN: ${{ secrets.QYNTRA_TOKEN }}
+      - name: Commit detected outcomes
+        run: |
+          git config user.name "qyntra-bot"
+          git config user.email "qyntra-bot@users.noreply.github.com"
+          git add .qyntra/release-outcomes.json
+          git diff --cached --quiet || (git commit -m "chore: release outcomes detected by Qyntra" && git push)
