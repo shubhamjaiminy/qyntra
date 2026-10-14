@@ -6,24 +6,29 @@ those try it, and some of those stick.
 
 ## Who to ask
 
-A good design partner has all of these:
+One buyer, defined in [BUYER.md](BUYER.md): an engineering or QA lead
+at a 20–200 engineer SaaS or fintech company that already runs
+Playwright tests and has flaky CI. That file also lists the signals to
+look for, where to find these people, their objections, and the
+qualifying questions for the first call.
+
+In short, a good design partner has all of these:
 
 - A web application with a **staging environment** reachable from CI.
+- **Playwright end-to-end tests** already in the repo.
 - A **CI pipeline** on GitHub Actions (others work, but GitHub is what
   the docs cover).
 - **Ships at least weekly**, so 4 weeks gives enough releases to judge.
-- **Feels the pain**: flaky end-to-end tests, slow failure triage, or no
-  end-to-end tests at all.
-- A **person who can say yes** without procurement: a QA lead,
-  engineering manager, staff engineer or CTO at a 10–300 engineer
-  company.
+- **Feels the pain**: flaky end-to-end tests and slow failure triage.
+- A **person who can say yes** without procurement.
 
 Start with people who already know you: former colleagues, managers and
 teams; QA and SDET communities you are part of; friends at startups.
 Warm introductions convert many times better than cold messages.
 
 Avoid for now: companies that need a security review before trying any
-tool (banks, healthcare enterprises) — they are the right customers
+tool (banks, insurers, healthcare enterprises; fintech *startups* are
+fine) — they are the right customers
 later, when there is a track record and a SOC 2 report.
 
 ## Message 1 — warm contact (LinkedIn / WhatsApp / email)
