@@ -23,13 +23,14 @@ how to set it up in about an hour.
 | **Length** | 4 weeks |
 | **Setup** | About 1 hour, once |
 | **Each release** | One command, 10 seconds: record what happened |
-| **Each week** | Send the pilot report (2 minutes) |
+| **Each week** | A 15-minute review: confirm what Qyntra caught ([scorecard](SCORECARD.md)) |
 | **End of pilot** | A 30-minute call and the [feedback form](FEEDBACK.md) |
 
-The pilot measures one thing above all: **were Qyntra's release
-decisions right?** That can only be measured if you record what happened
-after each release, so that one command matters more than anything else
-here.
+The pilot measures one number each week: **real bugs Qyntra caught,
+and false alarms it kept from blocking you**, as confirmed by your team.
+Over the four weeks it also measures whether its release decisions were
+right, which needs you to record what happened after each release. Those
+two habits matter more than anything else here.
 
 ## Your data
 
@@ -75,6 +76,12 @@ Edit `.qyntra/config.json`:
   environment variables, never from this file.
 - `discovery.excludePaths` — anything Qyntra must not click: logout,
   billing, delete-account, admin danger zones.
+- `execution.include` — your existing Playwright suites, e.g.
+  `["tests/e2e"]`, so Qyntra gates, diagnoses and repairs the tests you
+  already have.
+- `"gate": { "historyRuns": 1000 }` — keeps the whole pilot's runs.
+  The default of 50 can be less than a week on a busy repository, and
+  the weekly count needs every run of the week.
 
 ### 3. Check
 
@@ -121,11 +128,19 @@ npx qyntra outcome --commit <sha> --result incident --severity High --area check
 `.qyntra/release-outcomes.json` so CI sees it. This is how Qyntra learns
 whether its `SAFE` calls were safe, and how the pilot is judged.
 
-## Every week: send the pilot report
+## Every week: confirm what Qyntra caught
 
 Download the `qyntra-report` artifact from the latest CI run on your
-main branch, open `pilot-report.md`, check it, and send it to us. Or run
-it locally:
+main branch. It has two pilot files:
+
+- **`pilot-report.md`** holds counts and rates only, including bugs
+  caught and false alarms avoided for each week. Read it, then send it
+  to us.
+- **`pilot-review.md`** names the tests behind those counts. **Keep it.**
+  Tick each line that was right, and send us only the confirmed counts.
+
+The [weekly scorecard](SCORECARD.md) is the form for this, about five
+minutes, followed by a 15-minute call. You can also run it locally:
 
 ```bash
 npx qyntra pilot-report

@@ -42,10 +42,12 @@ import {
 import {
   appendRun,
   classifyFailure,
+  classifyFindings,
   computeStability,
   describeFailureHistory,
   gitContext,
   readHistory,
+  type RunFindings,
   type RunTestOutcome,
 } from './lib/run-history';
 
@@ -92,6 +94,7 @@ import {
 import {
   buildPilotReport,
   formatPilotReportMarkdown,
+  formatPilotReviewMarkdown,
   type PilotAnalysisInput,
 } from './lib/pilot-report';
 import type { RemediationArtifact } from './repair';
@@ -1080,7 +1083,16 @@ function buildDecision(
 
   // Record this run only after the verdict is decided, so the run being
   // judged is never part of its own baseline.
-  recordRun(config, paths, failuresArtifact, gated, risk, execution, performanceSnapshot);
+  recordRun(
+    config,
+    paths,
+    failuresArtifact,
+    gated,
+    risk,
+    execution,
+    classifyFindings(failures.filter((failure) => failure.test !== 'Unanalyzed failure')),
+    performanceSnapshot
+  );
 
   return gated;
 }
@@ -1100,6 +1112,7 @@ function recordRun(
   decision: ReleaseDecision,
   risk: { level: string; score: number },
   execution: { total: number; passed: number; failed: number; skipped: number },
+  findings: RunFindings,
   performance?: PerformanceSnapshot
 ): void {
   const outcomes: RunTestOutcome[] = (failuresArtifact?.tests ?? [])
@@ -1127,6 +1140,7 @@ function recordRun(
         qualityScore: decision.qualityScore,
         risk,
         tests: outcomes,
+        findings,
         ...(performance ? { performance } : {}),
       },
       config.gate.historyRuns
@@ -1677,8 +1691,10 @@ function commandPilotReport(args: ParsedArgs): number {
 
   stage('PILOT REPORT');
 
+  const runs = readHistory(paths.runHistory).runs;
+
   const report = buildPilotReport({
-    runs: readHistory(paths.runHistory).runs,
+    runs,
     outcomes: readOutcomes(paths.releaseOutcomes).outcomes,
     analysis: readOptionalArtifact<PilotAnalysisInput>(paths.aiAnalysis),
     remediation: readOptionalArtifact<RemediationArtifact>(paths.remediation),
@@ -1688,16 +1704,19 @@ function commandPilotReport(args: ParsedArgs): number {
 
   const jsonPath = path.join(paths.outputDir, 'pilot-report.json');
   const markdownPath = path.join(paths.outputDir, 'pilot-report.md');
+  const reviewPath = path.join(paths.outputDir, 'pilot-review.md');
   const markdown = formatPilotReportMarkdown(report);
 
   writeArtifact(jsonPath, report);
   fs.writeFileSync(markdownPath, markdown);
+  fs.writeFileSync(reviewPath, formatPilotReviewMarkdown(runs));
 
   process.stdout.write(`\n${markdown}\n`);
 
   log.info(`Report : ${markdownPath}`);
   log.info(`Data   : ${jsonPath}`);
   log.info('Both files are safe to share: they hold no test names, URLs or commits.');
+  log.info(`Review : ${reviewPath} — names the tests behind the counts. Keep it; do not send it.`);
 
   return EXIT_OK;
 }

@@ -7,6 +7,7 @@ import path from 'path';
 import {
   appendRun,
   classifyFailure,
+  classifyFindings,
   computeStability,
   describeFailureHistory,
   maintenanceDebt,
@@ -403,5 +404,44 @@ test.describe('score trend', () => {
     expect(trend).toHaveLength(2);
     expect(trend[1].qualityScore).toBe(72);
     expect(trend[1].verdict).toBe('UNSAFE');
+  });
+});
+
+test.describe('findings for the pilot report', () => {
+  const failure = (
+    test: string,
+    product: boolean,
+    testDefect: boolean,
+    verdict?: 'new-regression' | 'known-flaky' | 'chronic' | 'intermittent' | 'unknown'
+  ) => ({
+    test,
+    isLikelyProductDefect: product,
+    isLikelyTestDefect: testDefect,
+    ...(verdict ? { history: { verdict } } : {}),
+  });
+
+  test('a product defect is a bug, even on a flaky test', () => {
+    expect(classifyFindings([failure('pay', true, false, 'known-flaky')])).toEqual({ bugs: ['pay'], noise: [] });
+  });
+
+  test('a new regression is a bug unless the test itself broke', () => {
+    expect(
+      classifyFindings([
+        failure('search', false, false, 'new-regression'),
+        failure('selector', false, true, 'new-regression'),
+      ])
+    ).toEqual({ bugs: ['search'], noise: ['selector'] });
+  });
+
+  test('flaky and chronic failures are noise; unexplained ones are neither', () => {
+    expect(
+      classifyFindings([
+        failure('flaky', false, false, 'known-flaky'),
+        failure('chronic', false, false, 'chronic'),
+        failure('unclear', false, false, 'intermittent'),
+        failure('new', false, false, 'unknown'),
+        failure('flaky', false, false, 'known-flaky'),
+      ])
+    ).toEqual({ bugs: [], noise: ['flaky', 'chronic'] });
   });
 });

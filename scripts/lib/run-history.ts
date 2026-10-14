@@ -76,8 +76,66 @@ export interface RunHistoryEntry {
 
   tests: RunTestOutcome[];
 
+  /**
+   * Failing tests by what the gate made of them, kept so the pilot
+   * report can count each one once per week however many runs it
+   * failed in. Absent on runs recorded before this existed and on runs
+   * pulled from Qyntra Cloud.
+   */
+  findings?: RunFindings;
+
   /** Latency and page timing, the baseline for regression detection. */
   performance?: PerformanceSnapshot;
+}
+
+export interface RunFindings {
+  /**
+   * A likely product defect, or a new regression not put down to the
+   * test itself: a bug the gate caught.
+   */
+  bugs: string[];
+
+  /**
+   * A broken, flaky or chronically failing test, kept from blocking the
+   * release on its own: a false alarm the gate avoided.
+   */
+  noise: string[];
+}
+
+/**
+ * Sort a run's failures into bugs caught and noise filtered. A product
+ * defect is a bug however unstable its test is, matching the gate,
+ * where flakiness cannot wave a product defect through.
+ */
+export function classifyFindings(
+  failures: {
+    test: string;
+    isLikelyProductDefect: boolean;
+    isLikelyTestDefect: boolean;
+    history?: { verdict: FailureHistoryVerdict };
+  }[]
+): RunFindings {
+  const bugs = new Set<string>();
+  const noise = new Set<string>();
+
+  for (const failure of failures) {
+    const verdict = failure.history?.verdict;
+
+    if (
+      failure.isLikelyProductDefect ||
+      (verdict === 'new-regression' && !failure.isLikelyTestDefect)
+    ) {
+      bugs.add(failure.test);
+    } else if (
+      failure.isLikelyTestDefect ||
+      verdict === 'known-flaky' ||
+      verdict === 'chronic'
+    ) {
+      noise.add(failure.test);
+    }
+  }
+
+  return { bugs: [...bugs], noise: [...noise] };
 }
 
 export interface RunHistory {

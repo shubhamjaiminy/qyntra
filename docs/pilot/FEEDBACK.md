@@ -69,6 +69,8 @@ Filled in by us from the reports and the call.
 
 | Metric | Target | Result |
 | --- | --- | --- |
+| Confirmed bugs caught + false alarms avoided, per week | ≥ 1 bug or ≥ 3 false alarms ([scorecard](SCORECARD.md)) | |
+| Precision of those claims | ≥ 80% | |
 | Releases with a recorded outcome | ≥ 80% | |
 | Escape rate (called safe, then broke) | ≤ 10% | |
 | False alarms (blocked, but fine) | ≤ 1 in 5 `UNSAFE` calls | |

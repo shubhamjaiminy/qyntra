@@ -3,6 +3,8 @@ import { test, expect } from '@playwright/test';
 import {
   buildPilotReport,
   formatPilotReportMarkdown,
+  formatPilotReviewMarkdown,
+  weekOf,
 } from '../../scripts/lib/pilot-report';
 import type { ReleaseOutcome } from '../../scripts/lib/release-outcomes';
 import type { RunHistoryEntry } from '../../scripts/lib/run-history';
@@ -46,7 +48,9 @@ function outcome(commit: string, result: ReleaseOutcome['result']): ReleaseOutco
 const inputs = () => ({
   runs: [
     run(sha('a'), 'SAFE', { timestamp: daysAgo(12) }),
-    run(sha('b'), 'SAFE_WITH_RISK'),
+    run(sha('b'), 'SAFE_WITH_RISK', {
+      findings: { bugs: ['Checkout With Acme Corporate Card'], noise: ['Acme Legacy Export'] },
+    }),
     run(sha('c'), 'UNSAFE', { timestamp: daysAgo(8) }),
   ],
   outcomes: [
@@ -164,5 +168,50 @@ test.describe('pilot report', () => {
     ]) {
       expect(shared).not.toContain(secret);
     }
+  });
+
+  test('counts each bug and false alarm once per week, a bug never as noise', () => {
+    // 2026-10-05 is a Monday.
+    const at = (day: string) => `2026-10-${day}T09:00:00Z`;
+    const runs = [
+      run(sha('a'), 'UNSAFE', { timestamp: at('05'), findings: { bugs: ['checkout'], noise: ['export'] } }),
+      run(sha('b'), 'UNSAFE', { timestamp: at('07'), findings: { bugs: ['checkout'], noise: ['export', 'search'] } }),
+      run(sha('c'), 'SAFE', { timestamp: at('09'), findings: { bugs: [], noise: ['checkout'] } }),
+      run(sha('d'), 'UNSAFE', { timestamp: at('12'), findings: { bugs: ['login'], noise: [] } }),
+      run(sha('e'), 'SAFE', { timestamp: at('13') }),
+    ];
+
+    const report = buildPilotReport({ ...inputs(), runs });
+
+    expect(report.weekly.weeks).toEqual([
+      { weekOf: '2026-10-05', runs: 3, bugsCaught: 1, falseAlarmsAvoided: 2 },
+      { weekOf: '2026-10-12', runs: 1, bugsCaught: 1, falseAlarmsAvoided: 0 },
+    ]);
+    expect(report.weekly.runsWithoutFindings).toBe(1);
+
+    const markdown = formatPilotReportMarkdown(report);
+    expect(markdown).toContain('| 2026-10-05 | 3 | 1 | 2 |');
+    expect(markdown).toContain('Runs without findings (older Qyntra, or from the cloud): 1');
+  });
+
+  test('weeks start on Monday, UTC', () => {
+    expect(weekOf('2026-10-05T00:00:00Z')).toBe('2026-10-05');
+    expect(weekOf('2026-10-11T23:59:59Z')).toBe('2026-10-05');
+    expect(weekOf('2026-10-12T00:00:00Z')).toBe('2026-10-12');
+  });
+
+  test('the local review names the tests behind the counts, newest week first', () => {
+    const runs = [
+      run(sha('a'), 'UNSAFE', { timestamp: '2026-09-28T09:00:00Z', findings: { bugs: ['old bug'], noise: [] } }),
+      run(sha('b'), 'UNSAFE', { timestamp: '2026-10-06T09:00:00Z', findings: { bugs: ['checkout'], noise: ['export'] } }),
+    ];
+
+    const review = formatPilotReviewMarkdown(runs);
+
+    expect(review).toContain('do not send it');
+    expect(review).toContain('- [ ] checkout');
+    expect(review).toContain('- [ ] export');
+    expect(review.indexOf('Week of 2026-10-05')).toBeLessThan(review.indexOf('Week of 2026-09-28'));
+    expect(formatPilotReviewMarkdown([])).toContain('No runs with findings recorded yet.');
   });
 });

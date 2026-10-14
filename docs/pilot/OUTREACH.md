@@ -98,9 +98,11 @@ website copy.
 
 Keep one row per person; review weekly.
 
-| Name | Company | Role | Source (warm/cold) | Contacted | Replied | Call | Pilot started | Status / notes |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| | | | | | | | | |
+| Name | Company | Role | Source (warm/cold) | Matches [buyer](BUYER.md)? | Contacted | Replied | Call | Pilot started | Status / notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| | | | | | | | | | |
+
+Once a pilot starts, track it weekly in [SCORECARD.md](SCORECARD.md).
 
 A pilot counts as **started** only when Qyntra has run in their CI at
 least once. A "yes, sounds great" is not a pilot.

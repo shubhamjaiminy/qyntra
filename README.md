@@ -948,7 +948,7 @@ that answers but never finishes loading names the files still loading.
 | `qyntra outcome ...` | Record what happened after a release; `--list` shows the track record |
 | `qyntra app` | Every feature in the menu, checked in parallel, one summary |
 | `qyntra feature "<name>"` | Find one feature, understand it, write and verify tests, review it, decide if it is ready |
-| `qyntra pilot-report` | Summarise runs, decisions, accuracy and repairs as counts only, safe to share |
+| `qyntra pilot-report` | Bugs caught and false alarms avoided per week, decisions, accuracy and repairs, as counts only and safe to share; plus a local `pilot-review.md` naming the tests behind the counts |
 | `qyntra upload [--dry-run]` | Send the last run to Qyntra Cloud, or show exactly what would be sent |
 
 `gate` is separate from `run` so you can compute the verdict in a later
