@@ -56,7 +56,8 @@ across every repo, GitHub and Slack workflow, and enterprise controls.
 | Plan | Price |
 | --- | --- |
 | Team | $49 per project / month |
-| Business | $299 / month + $29 per project |
+| Business | $299 / month, up to 50 projects |
+| Design partner | $500 / month, founding price for the first pilots |
 | Enterprise | Annual contract — SSO, audit, SLA |
 
 ## Market
@@ -97,9 +98,10 @@ companies with 20–500 engineers that ship weekly or faster.
 ## The ask
 
 **Design partners:** teams with a staging environment and a CI
-pipeline, willing to run Qyntra for 4 weeks and tell us honestly what
-it got wrong. Free, about an hour of setup, and direct influence on the
-product.
+pipeline, willing to run Qyntra on a real app and tell us honestly what
+it got wrong. Two weeks free, then $500 a month at a founding price
+fixed for a year, with the first month refunded if it doesn't deliver.
+About an hour of setup, and direct influence on the product.
 
 ---
 

@@ -78,3 +78,4 @@ Filled in by us from the reports and the call.
 | Test-vs-product diagnosis right | ≥ 80% | |
 | Still running in CI at week 4 | Yes | |
 | Would pay | Yes | |
+| Paying after week 2 ([DESIGN-PARTNER.md](DESIGN-PARTNER.md)) | Yes, $500/month | |

@@ -13,14 +13,15 @@ how to set it up in about an hour.
   if they pass.
 - A release decision on every pull request: `SAFE`, `SAFE_WITH_RISK` or
   `UNSAFE`, with the reasons.
-- Free for the length of the pilot, and a direct line to the person
-  building it.
+- A direct line to the person building it, and your problems first on
+  the roadmap.
 
 ## What we ask
 
 | | |
 | --- | --- |
-| **Length** | 4 weeks |
+| **Length** | 4 weeks: 2 free, then month to month |
+| **Price** | Free for 2 weeks. Then $500/month, fixed for 12 months, cancel any time, first paid month refunded if it misses the scorecard bar ([terms](DESIGN-PARTNER.md)) |
 | **Setup** | About 1 hour, once |
 | **Each release** | One command, 10 seconds: record what happened |
 | **Each week** | A 15-minute review: confirm what Qyntra caught ([scorecard](SCORECARD.md)) |

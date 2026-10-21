@@ -31,6 +31,7 @@ npx qyntra gate                    # decides, then uploads
 | `QYNTRA_CLOUD_DB` | no | SQLite file; default `data/qyntra-cloud.db` |
 | `PORT` | no | Default 8080 |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_TEAM`, `STRIPE_PRICE_BUSINESS` | for billing | Without them the billing page says billing is not configured |
+| `STRIPE_PRICE_PARTNER` | no | The $500/month design-partner price. Without it, an org offered the plan is told to pay by invoice |
 
 ### Fly.io (about $5/month)
 
@@ -56,12 +57,14 @@ balancer). The process speaks plain HTTP on `PORT`.
 
 ## Stripe
 
-1. Create two recurring prices: **Team** ($49, per unit — billed per
-   project) and **Business** ($299, flat).
+1. Create the recurring prices: **Team** ($49, per unit — billed per
+   project), **Business** ($299, flat) and, for pilots, **Design
+   partner** ($500, flat). The partner plan is never listed publicly;
+   offer it to one organization at a time from `/admin`.
 2. Add a webhook endpoint `https://<your-domain>/v1/stripe/webhook` for
    `checkout.session.completed`, `customer.subscription.updated` and
    `customer.subscription.deleted`.
-3. Set the four `STRIPE_*` secrets and restart.
+3. Set the `STRIPE_*` secrets and restart.
 
 The webhook is the only thing that changes a plan, and it is verified
 with the endpoint's signing secret.

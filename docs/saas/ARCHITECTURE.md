@@ -239,7 +239,7 @@ upload format cannot drift.
 | --- | --- | --- |
 | **Open source CLI** | Free forever | Everything that runs in CI today |
 | **Team** | $49 per project / month | Cloud history, dashboard, GitHub App, Slack, outcome detection, 5 users |
-| **Business** | $299 / month + $29 per project | Unlimited users, org view, incident integrations, repair approval, managed AI quota |
+| **Business** | $299 / month, up to 50 projects | Unlimited users, org view, incident integrations, repair approval, managed AI quota |
 | **Enterprise** | Annual contract | SSO/SAML, audit export, retention control, region, SLA, SOC 2 report |
 
 Priced per project, not per test run, so teams are never punished for

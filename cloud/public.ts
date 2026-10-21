@@ -42,7 +42,7 @@ npx qyntra run            # tests, diagnosis, release decision</pre>
       html`<h1>Pricing</h1>
       <p class="muted">The CLI is free and runs in your CI. Plans add the cloud: history, dashboards, track record, team and alerts.</p>
       <div class="plans">
-        ${Object.entries(PLANS).map(
+        ${Object.entries(PLANS).filter(([, plan]) => !plan.hidden).map(
           ([key, plan]) => html`<div class="card plan">
             <h2 style="margin-top:0">${plan.name}</h2>
             <div class="price">${plan.price === undefined ? 'Talk to us' : plan.price === 0 ? '$0' : `$${plan.price}`}<span class="small muted">${plan.price ? (plan.perProject ? ' / project / month' : ' / month') : ''}</span></div>

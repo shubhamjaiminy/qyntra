@@ -14,6 +14,11 @@ export interface PlanLimits {
   runsPerMonth: number;
   retentionDays: number;
   features: string[];
+  /**
+   * Not on the pricing page and not for sale to everyone: an operator
+   * offers it to one organization at a time (the design-partner plan).
+   */
+  hidden?: boolean;
 }
 
 export const PLANS: Record<string, PlanLimits> = {
@@ -46,6 +51,17 @@ export const PLANS: Record<string, PlanLimits> = {
     runsPerMonth: 100_000,
     retentionDays: 395,
     features: ['Up to 50 projects', 'Unlimited members', '100,000 runs a month', 'Audit log export', 'Priority support'],
+  },
+  partner: {
+    name: 'Design partner',
+    price: 500,
+    perProject: false,
+    projects: 10,
+    members: 50,
+    runsPerMonth: 20_000,
+    retentionDays: 395,
+    features: ['Founding price, fixed for 12 months', 'Up to 10 projects', 'Release gate and AI assistant checks', 'Weekly scorecard review with the founder', 'Direct say in the roadmap'],
+    hidden: true,
   },
   enterprise: {
     name: 'Enterprise',

@@ -195,6 +195,9 @@ const MIGRATIONS: string[] = [
     used_at TEXT
   );
   `,
+  `
+  ALTER TABLE orgs ADD COLUMN offered_plan TEXT;
+  `,
 ];
 
 export class Store {
@@ -311,6 +314,11 @@ export class Store {
     this.db
       .prepare('UPDATE orgs SET plan = ?, stripe_customer_id = COALESCE(?, stripe_customer_id), stripe_subscription_id = COALESCE(?, stripe_subscription_id) WHERE id = ?')
       .run(plan, stripe?.customerId ?? null, stripe?.subscriptionId ?? null, orgId);
+  }
+
+  /** Offer a hidden plan to one org, or withdraw the offer with undefined. */
+  offerPlan(orgId: string, plan: string | undefined): void {
+    this.db.prepare('UPDATE orgs SET offered_plan = ? WHERE id = ?').run(plan ?? null, orgId);
   }
 
   orgByStripeCustomer(customerId: string): Org | undefined {
@@ -634,12 +642,13 @@ export class Store {
   }
 
   /** Every org with its size and usage, for the operator console. */
-  allOrgs(): { id: string; name: string; slug: string; plan: string; createdAt: string; projects: number; members: number; runsThisMonth: number }[] {
+  allOrgs(): { id: string; name: string; slug: string; plan: string; offeredPlan?: string; createdAt: string; projects: number; members: number; runsThisMonth: number }[] {
     return (this.db.prepare('SELECT * FROM orgs ORDER BY created_at DESC').all() as unknown as OrgRow[]).map((row) => ({
       id: row.id,
       name: row.name,
       slug: row.slug,
       plan: row.plan,
+      ...(row.offered_plan ? { offeredPlan: row.offered_plan } : {}),
       createdAt: row.created_at,
       projects: (this.db.prepare('SELECT COUNT(*) AS c FROM projects WHERE org_id = ?').get(row.id) as { c: number }).c,
       members: (this.db.prepare('SELECT COUNT(*) AS c FROM memberships WHERE org_id = ?').get(row.id) as { c: number }).c,
@@ -777,6 +786,8 @@ export interface Org {
   plan: string;
   stripeCustomerId?: string;
   stripeSubscriptionId?: string;
+  /** A hidden plan an operator has offered this org, which its owner may buy. */
+  offeredPlan?: string;
   createdAt: string;
 }
 
@@ -873,6 +884,7 @@ interface OrgRow {
   plan: string;
   stripe_customer_id: string | null;
   stripe_subscription_id: string | null;
+  offered_plan: string | null;
   created_at: string;
 }
 
@@ -949,6 +961,7 @@ const toOrg = (row: OrgRow): Org => ({
   plan: row.plan,
   ...(row.stripe_customer_id ? { stripeCustomerId: row.stripe_customer_id } : {}),
   ...(row.stripe_subscription_id ? { stripeSubscriptionId: row.stripe_subscription_id } : {}),
+  ...(row.offered_plan ? { offeredPlan: row.offered_plan } : {}),
   createdAt: row.created_at,
 });
 

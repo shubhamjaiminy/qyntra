@@ -249,14 +249,37 @@ export function accountRoutes(router: Router, context: AccountContext): void {
       'Operator console',
       html`<h1>Operator console</h1>
       <p class="muted">${orgs.length} organization(s) · ${orgs.filter((org) => org.plan !== 'free').length} on a paid or granted plan · ${orgs.reduce((total, org) => total + org.runsThisMonth, 0)} runs this month</p>
-      <table><thead><tr><th>Organization</th><th>Created</th><th>Projects</th><th>Members</th><th>Runs this month</th><th>Plan</th></tr></thead><tbody>
+      <table><thead><tr><th>Organization</th><th>Created</th><th>Projects</th><th>Members</th><th>Runs this month</th><th>Plan</th><th>Design partner</th></tr></thead><tbody>
       ${orgs.map(
         (org) => html`<tr><td>${org.name}<div class="small muted">${org.slug}</div></td><td>${org.createdAt.slice(0, 10)}</td><td>${org.projects}</td><td>${org.members}</td><td>${org.runsThisMonth}</td>
           <td><form class="inline" method="post" action="/admin/orgs/${org.id}/plan">${csrfField(session.csrf)}
             <select name="plan">${Object.keys(PLANS).map((plan) => html`<option value="${plan}" ${plan === org.plan ? 'selected' : ''}>${PLANS[plan].name}</option>`)}</select>
-            <button class="secondary" type="submit">Set</button></form></td></tr>`
+            <button class="secondary" type="submit">Set</button></form></td>
+          <td>${org.plan === 'partner'
+            ? html`<span class="badge ok">paying</span>`
+            : html`<form class="inline" method="post" action="/admin/orgs/${org.id}/offer">${csrfField(session.csrf)}
+              <input type="hidden" name="offer" value="${org.offeredPlan === 'partner' ? '' : 'partner'}">
+              <button class="secondary" type="submit">${org.offeredPlan === 'partner' ? 'Withdraw offer' : 'Offer'}</button></form>`}</td></tr>`
       )}</tbody></table>`,
       { session }
+    );
+  });
+
+  // Puts the hidden design-partner plan on this org's billing page, where
+  // its owner pays by card. Granting it free is "Set" above.
+  router.post('/admin/orgs/:id/offer', (request) => {
+    const session = requireOperator(request);
+    guards.checkForm(context, request, session);
+
+    const offer = field(request, 'offer');
+    const org = context.store.orgById(request.params.id);
+    if (!org || (offer !== '' && !PLANS[offer]?.hidden)) throw new HttpError(400, 'Unknown organization or offer.');
+
+    context.store.offerPlan(org.id, offer || undefined);
+    context.store.audit(org.id, `operator:${session.user.email}`, offer ? 'billing.plan_offered' : 'billing.offer_withdrawn', offer || 'none');
+
+    return redirect(
+      `/admin?ok=${encodeURIComponent(offer ? `${org.name} can now start the ${PLANS[offer].name} plan from its billing page.` : `Offer to ${org.name} withdrawn.`)}`
     );
   });
 

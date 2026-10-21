@@ -39,15 +39,17 @@ later, when there is a track record and a SOC 2 report.
 > bug, repairs broken tests, and gives every PR a SAFE / UNSAFE release
 > decision with reasons. Your code and data never leave your CI.
 >
-> I'm looking for 3–5 teams to try it free for 4 weeks on a real staging
-> app and tell me honestly what it gets wrong. Setup is about an hour.
+> I'm looking for 3–5 design partners to run it on a real staging app.
+> The first two weeks are free; if it's earning its keep, it's $500 a
+> month after that at a founding price, refunded if the first month
+> doesn't deliver. Setup is about an hour.
 >
 > Would [team/company] be up for it, or is there someone you'd suggest I
 > talk to?
 
 ## Message 2 — cold, to a QA or engineering lead
 
-**Subject:** Is this release safe to ship? (4-week free pilot)
+**Subject:** Is this release safe to ship? (2 weeks free)
 
 > Hi [name],
 >
@@ -60,9 +62,11 @@ later, when there is a track record and a SOC 2 report.
 > Unlike most AI testing tools, nothing is uploaded: tests, code and
 > screenshots stay in your CI, and it can run on a fully local model.
 >
-> I'm looking for a few design partners for a free 4-week pilot. In
-> return I'd ask for an hour of setup and honest feedback on its
-> decisions. One-page overview attached.
+> I'm looking for a few design partners. Two weeks free on your staging
+> app, with a weekly count of real bugs caught and false alarms avoided.
+> If the numbers are there, it's $500 a month at a founding price, with
+> the first month refunded if it doesn't deliver. One-page overview
+> attached.
 >
 > Worth a 20-minute call?
 >
@@ -88,8 +92,10 @@ That last question is useful even from people who say no.
    - How much time goes into flaky or broken tests each week?
 2. **Show (5 min)** — `qyntra run` on the TodoMVC demo, then the
    dashboard and the release decision.
-3. **Ask (5 min)** — "Would you try it on your staging app for 4 weeks?"
-   If yes, agree a setup session date and send `ONBOARDING.md`.
+3. **Ask (5 min)** — "Would you try it on your staging app? Two weeks
+   free, then $500 a month if the numbers are there." If yes, agree a
+   setup session date and send `ONBOARDING.md`. The week-2 ask is in
+   [DESIGN-PARTNER.md](DESIGN-PARTNER.md).
 
 Write down their exact words about the pain. They become the
 website copy.

@@ -7,6 +7,8 @@
  *   STRIPE_WEBHOOK_SECRET   whsec_… for POST /v1/stripe/webhook
  *   STRIPE_PRICE_TEAM       price id, billed per project
  *   STRIPE_PRICE_BUSINESS   price id, flat monthly
+ *   STRIPE_PRICE_PARTNER    price id, flat monthly; optional. The design-partner
+ *                           plan, sold only to orgs an operator offered it to
  *
  * Without the key, the billing page says billing is not configured and
  * every org stays on its current plan — a self-hosted install works.
@@ -29,10 +31,24 @@ interface BillingContext {
 
 const STRIPE_API = 'https://api.stripe.com/v1';
 
-const PAID_PLANS = ['team', 'business'] as const;
+const PAID_PLANS = ['team', 'business', 'partner'] as const;
 type PaidPlan = (typeof PAID_PLANS)[number];
 
-const priceFor = (plan: PaidPlan) => (plan === 'team' ? process.env.STRIPE_PRICE_TEAM : process.env.STRIPE_PRICE_BUSINESS);
+const PRICE_ENV: Record<PaidPlan, string> = {
+  team: 'STRIPE_PRICE_TEAM',
+  business: 'STRIPE_PRICE_BUSINESS',
+  partner: 'STRIPE_PRICE_PARTNER',
+};
+
+const priceFor = (plan: PaidPlan) => process.env[PRICE_ENV[plan]];
+
+/**
+ * The plans this org may buy: the public ones, plus a hidden plan only
+ * when an operator offered it to this org.
+ */
+export function purchasablePlans(org: { offeredPlan?: string }): PaidPlan[] {
+  return PAID_PLANS.filter((plan) => !PLANS[plan].hidden || org.offeredPlan === plan);
+}
 
 export const billingConfigured = () => !!process.env.STRIPE_SECRET_KEY && !!process.env.STRIPE_PRICE_TEAM && !!process.env.STRIPE_PRICE_BUSINESS;
 
@@ -131,16 +147,19 @@ export function extendWithBilling(router: Router, context: BillingContext): void
       ${!billingConfigured()
         ? html`<div class="card"><p>Online billing is not configured on this server. To change plan, contact your Qyntra administrator.</p></div>`
         : html`<div class="plans">
-          ${PAID_PLANS.map((key) => {
+          ${purchasablePlans(org).map((key) => {
             const plan = PLANS[key];
             return html`<div class="card plan"><h2 style="margin-top:0">${plan.name}</h2>
+              ${plan.hidden ? html`<span class="badge ok">offered to you</span>` : ''}
               <div class="price">$${plan.price}<span class="small muted">${plan.perProject ? ' / project / month' : ' / month'}</span></div>
               <ul>${plan.features.map((feature) => html`<li>${feature}</li>`)}</ul>
               ${org.plan === key
                 ? html`<span class="badge ok">current plan</span>`
-                : owner
-                  ? html`<form method="post" action="/o/${org.slug}/billing/checkout">${csrfField(session.csrf)}<input type="hidden" name="plan" value="${key}"><button type="submit">Upgrade to ${plan.name}</button></form>`
-                  : html`<span class="muted small">Ask the owner to upgrade.</span>`}</div>`;
+                : !priceFor(key)
+                  ? html`<span class="muted small">Card payment is not set up for this plan. Reply to your invitation email to pay by invoice.</span>`
+                  : owner
+                    ? html`<form method="post" action="/o/${org.slug}/billing/checkout">${csrfField(session.csrf)}<input type="hidden" name="plan" value="${key}"><button type="submit">${plan.hidden ? 'Start' : 'Upgrade to'} ${plan.name}</button></form>`
+                    : html`<span class="muted small">Ask the owner to upgrade.</span>`}</div>`;
           })}
           </div>
           ${owner && org.stripeCustomerId
@@ -156,8 +175,9 @@ export function extendWithBilling(router: Router, context: BillingContext): void
 
     if (!billingConfigured()) throw new HttpError(503, 'Billing is not configured on this server.');
 
-    const plan = PAID_PLANS.find((candidate) => candidate === field(request, 'plan'));
-    if (!plan) throw new HttpError(400, 'Choose Team or Business.');
+    const plan = purchasablePlans(org).find((candidate) => candidate === field(request, 'plan'));
+    if (!plan) throw new HttpError(400, 'Choose a plan offered on this page.');
+    if (!priceFor(plan)) throw new HttpError(503, `Card payment is not set up for the ${PLANS[plan].name} plan.`);
 
     const quantity = plan === 'team' ? Math.max(1, context.store.projects(org.id).length) : 1;
 

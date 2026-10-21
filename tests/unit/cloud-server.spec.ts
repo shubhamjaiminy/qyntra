@@ -433,6 +433,58 @@ test('the operator console is only for operators, and grants plans', async () =>
   }
 });
 
+test('the design-partner plan is sold only to an org an operator offered it to', async () => {
+  const { browser: ada, orgSlug } = await signUp(cloud, 'ada@acme.example', 'Acme');
+  const operator = await signUp(cloud, 'founder@qyntra.example', 'Qyntra');
+  const org = cloud.store.orgForMember(cloud.store.userByEmail('ada@acme.example')!.id, orgSlug)!;
+
+  const env = { QYNTRA_CLOUD_ADMINS: 'founder@qyntra.example', STRIPE_SECRET_KEY: 'sk_test_x', STRIPE_PRICE_TEAM: 'price_team', STRIPE_PRICE_BUSINESS: 'price_business' };
+  Object.assign(process.env, env);
+
+  try {
+    // Not public, and not for sale before an offer.
+    expect(await (await fetch(`${cloud.url}/pricing`)).text()).not.toContain('Design partner');
+    expect((await ada.get(`/o/${orgSlug}/billing`)).body).not.toContain('Design partner');
+
+    const refused = await ada.post(`/o/${orgSlug}/billing/checkout`, { plan: 'partner', csrf: await ada.csrf(`/o/${orgSlug}/billing`) });
+    expect(refused.status).toBe(400);
+
+    await operator.browser.post(`/admin/orgs/${org.id}/offer`, { offer: 'partner', csrf: await operator.browser.csrf('/admin') });
+    expect(cloud.store.orgById(org.id)!.offeredPlan).toBe('partner');
+
+    // Offered, but no Stripe price for it yet: say how to pay instead of failing at checkout.
+    const offered = (await ada.get(`/o/${orgSlug}/billing`)).body;
+    expect(offered).toContain('Design partner');
+    expect(offered).toContain('offered to you');
+    expect(offered).toContain('pay by invoice');
+
+    const noPrice = await ada.post(`/o/${orgSlug}/billing/checkout`, { plan: 'partner', csrf: await ada.csrf(`/o/${orgSlug}/billing`) });
+    expect(noPrice.status).toBe(503);
+
+    // An operator can only offer hidden plans; public ones are bought, or granted with "Set".
+    const publicOffer = await operator.browser.post(`/admin/orgs/${org.id}/offer`, { offer: 'team', csrf: await operator.browser.csrf('/admin') });
+    expect(publicOffer.status).toBe(400);
+
+    await operator.browser.post(`/admin/orgs/${org.id}/offer`, { offer: '', csrf: await operator.browser.csrf('/admin') });
+    expect(cloud.store.orgById(org.id)!.offeredPlan).toBeUndefined();
+    expect((await ada.get(`/o/${orgSlug}/billing`)).body).not.toContain('Design partner');
+  } finally {
+    for (const key of Object.keys(env)) delete process.env[key];
+  }
+});
+
+test('a paid design-partner checkout puts the org on the partner plan', () => {
+  const store = new Store(':memory:');
+  const { org } = store.createUserWithOrg({ email: 'a@b.example', name: 'A', passwordHash: 'x', orgName: 'Acme' });
+
+  applyStripeEvent(store, { type: 'checkout.session.completed', data: { object: { customer: 'cus_2', subscription: 'sub_2', metadata: { org_id: org.id, plan: 'partner' } } } });
+  expect(store.orgById(org.id)!.plan).toBe('partner');
+
+  applyStripeEvent(store, { type: 'customer.subscription.updated', data: { object: { customer: 'cus_2', status: 'unpaid' } } });
+  expect(store.orgById(org.id)!.plan).toBe('free');
+  store.close();
+});
+
 test('deleting an account removes the orgs only they belonged to', async () => {
   const { browser } = await signUp(cloud, 'ada@acme.example', 'Acme');
 
