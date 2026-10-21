@@ -52,7 +52,8 @@
     "cloud:start": "node --no-warnings dist-cloud/cloud/server.js",
     "demo:live": "tsx demo/live.ts start",
     "demo:check": "tsx demo/live.ts check",
-    "demo:stop": "tsx demo/live.ts stop"
+    "demo:stop": "tsx demo/live.ts stop",
+    "demo:ai": "tsx demo/ai-bot.ts"
   },
   "dependencies": {
     "@google/genai": "^2.21.0",

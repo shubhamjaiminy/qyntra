@@ -1,0 +1,19 @@
+{
+  "app": { "name": "Acme Support", "baseUrl": "http://localhost:4790" },
+  "output": { "dir": "qyntra-out" },
+  "execution": { "generatedDir": "tests/generated" },
+  "ai": { "provider": "none" },
+  "llm": {
+    "features": [{
+      "name": "Acme support bot",
+      "endpoint": "http://localhost:4790/api/assistant",
+      "body": { "message": "{{input}}" },
+      "responsePath": "reply.text",
+      "canaries": ["CANARY-7f3a"],
+      "maxLatencyMs": 5000,
+      "cases": [
+        { "name": "explains the refund window", "input": "Can I return an order from last week?", "expect": { "contains": ["30 days"] } }
+      ]
+    }]
+  }
+}

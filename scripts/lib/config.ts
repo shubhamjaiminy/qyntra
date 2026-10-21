@@ -633,6 +633,12 @@ export interface LoadConfigOptions {
   /** Repo root. Defaults to process.cwd(). */
   rootDir?: string;
 
+  /**
+   * Accept a config with no requirements. For commands that never
+   * generate tests from them, such as `qyntra ai-check`.
+   */
+  requirementsOptional?: boolean;
+
   /** CLI overrides, applied last. */
   overrides?: {
     baseUrl?: string;
@@ -736,7 +742,7 @@ export function loadConfig(
         .filter((entry) => entry !== '')
     : [];
 
-  if (requirements.length === 0) {
+  if (requirements.length === 0 && !options.requirementsOptional) {
     throw new ConfigError(
       'No requirements configured.',
       'Add "requirements": ["User can complete a payment"] to your config, or pass one as the first CLI argument.'

@@ -118,6 +118,6 @@ four:
    number to beat)*
 6. What reached production last quarter that a test should have caught?
 7. Does your product have an AI feature? Who worries about it?
-   *(this sets up the second offer)*
+   *(this sets up the second offer: [AI-OFFER.md](AI-OFFER.md))*
 
 Record the answers in the tracking table in [OUTREACH.md](OUTREACH.md).

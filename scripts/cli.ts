@@ -92,6 +92,11 @@ import {
   type OutcomeSeverity,
 } from './lib/release-outcomes';
 import {
+  buildAiAssessment,
+  formatAiAssessmentMarkdown,
+  type PlaywrightJsonReport,
+} from './lib/ai-assessment';
+import {
   buildPilotReport,
   formatPilotReportMarkdown,
   formatPilotReviewMarkdown,
@@ -202,8 +207,12 @@ function flagString(
 // CONFIG RESOLUTION
 // --------------------------------------------------
 
-function configFrom(args: ParsedArgs): QyntraConfig {
+function configFrom(
+  args: ParsedArgs,
+  options: { requirementsOptional?: boolean } = {}
+): QyntraConfig {
   return loadConfig({
+    ...options,
     configPath: flagString(args.flags, 'config'),
 
     overrides: {
@@ -1722,6 +1731,116 @@ function commandPilotReport(args: ParsedArgs): number {
 }
 
 // --------------------------------------------------
+// COMMAND: ai-check
+// --------------------------------------------------
+
+/**
+ * Attack and check the AI features in llm.features, and nothing else:
+ * no discovery, no UI or API tests, no release gate. For a security or
+ * compliance team assessing an assistant, and for a CI job that guards
+ * one. Exits 1 when any check fails.
+ */
+async function commandAiCheck(args: ParsedArgs): Promise<number> {
+  const config = configFrom(args, { requirementsOptional: true });
+  const paths = artifactPaths(config);
+
+  if (config.llm.features.length === 0) {
+    throw new ConfigError(
+      'qyntra ai-check needs at least one AI feature in llm.features (.qyntra/config.json). ' +
+        'See "AI features in your product" in the README.'
+    );
+  }
+
+  ensureOutputDir(paths);
+
+  stage('QYNTRA AI FEATURE CHECK');
+
+  for (const feature of config.llm.features) {
+    log.info(`Feature : ${feature.name}`);
+  }
+
+  // Only chat-widget features drive the app's UI, and only they need its login.
+  if (config.llm.features.some((feature) => feature.ui)) {
+    await loginIfConfigured(config);
+  }
+
+  runStage('LLM TEST GENERATION', 'llm-test-generator', [], config);
+
+  stage('ATTACKING AND CHECKING');
+
+  const resultsFile = path.join(paths.outputDir, 'ai-check-results.json');
+  fs.rmSync(resultsFile, { force: true });
+
+  const generatedFilter = path
+    .relative(config.rootDir, paths.generatedTests)
+    .split(path.sep)
+    .join('/');
+
+  spawnSync(
+    process.execPath,
+    [
+      require.resolve('@playwright/test/cli'),
+      'test',
+      `${generatedFilter}/llm-`,
+      '--reporter=list,json',
+    ],
+    {
+      cwd: config.rootDir,
+      stdio: 'inherit',
+      shell: false,
+      env: {
+        ...process.env,
+        ...sessionEnv(config),
+        PLAYWRIGHT_JSON_OUTPUT_NAME: resultsFile,
+      },
+    }
+  );
+
+  const generation = readOptionalArtifact<{
+    features?: { file: string; tests: string[]; notes: string[] }[];
+  }>(path.join(paths.outputDir, 'llm-generation.json'));
+
+  const results = readOptionalArtifact<PlaywrightJsonReport>(resultsFile);
+
+  if (!results) {
+    log.warn('Playwright produced no results; every check is reported as not run.');
+  }
+
+  const judge = config.llm.judge;
+  const assessment = buildAiAssessment({
+    features: config.llm.features,
+    generated: generation?.features ?? [],
+    results,
+    judge: judge ? `${judge.provider} (${judge.model})` : undefined,
+  });
+
+  const jsonPath = path.join(paths.outputDir, 'ai-assessment.json');
+  const markdownPath = path.join(paths.outputDir, 'ai-assessment.md');
+
+  writeArtifact(jsonPath, assessment);
+  fs.writeFileSync(markdownPath, formatAiAssessmentMarkdown(assessment));
+
+  stage('AI FEATURE ASSESSMENT');
+
+  const { security, robustness, behaviour } = assessment.summary;
+
+  log.info(`Result     : ${assessment.verdict}`);
+  log.info(`Security   : ${security.passed} held, ${security.failed} failed, ${security.notRun} not run`);
+  log.info(`Robustness : ${robustness.passed} held, ${robustness.failed} failed, ${robustness.notRun} not run`);
+  log.info(`Behaviour  : ${behaviour.passed} held, ${behaviour.failed} failed, ${behaviour.notRun} not run`);
+  log.info(`Report     : ${markdownPath}`);
+
+  if (assessment.verdict === 'UNREACHABLE') {
+    throw new UnreachableError(
+      'No AI feature answered a single check, so nothing was assessed.',
+      'Check the feature is up and reachable from here; the report lists each connection error.'
+    );
+  }
+
+  return assessment.verdict === 'FAIL' ? EXIT_QUALITY_GATE_FAILED : EXIT_OK;
+}
+
+// --------------------------------------------------
 // COMMAND: feature
 // --------------------------------------------------
 
@@ -2051,6 +2170,8 @@ Usage:
                               [--concurrency 2] [--max-features 50]
                               [--include "Rules|Orders"] [--exclude "Reports"]
                               [--with-ai] [--allow-writes]
+  qyntra ai-check             Attack and check the AI features in llm.features;
+                              writes an OWASP-mapped assessment
   qyntra pilot-report         Summarise runs, decisions and accuracy to share
   qyntra upload [--dry-run]   Send the last run to Qyntra Cloud, or show it
                               [--level metrics|standard|full]
@@ -2132,6 +2253,9 @@ async function main(): Promise<number> {
 
     case 'pilot-report':
       return commandPilotReport(args);
+
+    case 'ai-check':
+      return commandAiCheck(args);
 
     case 'upload':
       return commandUpload(args);

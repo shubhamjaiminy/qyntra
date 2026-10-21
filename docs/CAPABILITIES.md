@@ -117,8 +117,9 @@ The details for every capability below are in the [README](../README.md).
 - **Endpoint or chat-widget testing.** Calls the API directly, or drives
   the chat UI in a real browser and waits for a streamed reply to finish.
 - **Deterministic checks:** `contains`, `notContains`, regex and latency.
-- **Built-in adversarial probes:** prompt injection, role escape, data
-  exfiltration, and empty, oversized and non-English input.
+- **Built-in adversarial probes:** prompt injection, role escape,
+  base64-encoded and non-English injection, data exfiltration, and
+  empty, oversized and non-English input.
 - **Canary leak detection.** A unique string planted in the system prompt
   fails any answer that contains it.
 - **A judge you don't have to take on trust.** Rubrics are graded at
@@ -126,6 +127,12 @@ The details for every capability below are in the [README](../README.md).
   must contain the facts the rubric names, and each judge is calibrated on
   known good and bad answers before use. A judge that fails calibration
   is skipped, never counted as a pass.
+- **Standalone assessment (`qyntra ai-check`).** Runs only the AI-feature
+  checks and writes a report for security and compliance readers. It
+  gives PASS / FAIL / INCOMPLETE / UNREACHABLE, lists each finding with
+  the attempt and the reply, and maps coverage to the OWASP Top 10 for
+  LLM Applications (2025), naming the categories it cannot reach. It
+  exits 1 on a failed check and 4 when the assistant never answered.
 
 ### Feature testing with behaviour probes
 - `qyntra feature "<name>"` finds a feature in the menu, explores its
@@ -286,4 +293,6 @@ The details for every capability below are in the [README](../README.md).
   often not expected values.
 - Rubric judging is only as good as the judge model. Chat-UI tests read
   text replies only.
+- AI probes are fixed, single-turn attacks. No indirect injection, tool
+  misuse or multi-turn attacks yet.
 - Run history keys on test title, so renaming a test resets its baseline.
