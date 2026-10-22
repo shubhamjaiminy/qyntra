@@ -53,7 +53,8 @@
     "demo:live": "tsx demo/live.ts start",
     "demo:check": "tsx demo/live.ts check",
     "demo:stop": "tsx demo/live.ts stop",
-    "demo:ai": "tsx demo/ai-bot.ts"
+    "demo:ai": "tsx demo/ai-bot.ts",
+    "demo:pilot": "tsx demo/pilot.ts"
   },
   "dependencies": {
     "@google/genai": "^2.21.0",

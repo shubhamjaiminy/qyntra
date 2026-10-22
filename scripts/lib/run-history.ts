@@ -96,8 +96,9 @@ export interface RunFindings {
   bugs: string[];
 
   /**
-   * A broken, flaky or chronically failing test, kept from blocking the
-   * release on its own: a false alarm the gate avoided.
+   * A broken, flaky or chronically failing test in a run the gate did
+   * not block: a false alarm it avoided. Empty when the run was
+   * blocked, because then nothing was avoided.
    */
   noise: string[];
 }
@@ -113,7 +114,8 @@ export function classifyFindings(
     isLikelyProductDefect: boolean;
     isLikelyTestDefect: boolean;
     history?: { verdict: FailureHistoryVerdict };
-  }[]
+  }[],
+  verdict: string
 ): RunFindings {
   const bugs = new Set<string>();
   const noise = new Set<string>();
@@ -135,7 +137,9 @@ export function classifyFindings(
     }
   }
 
-  return { bugs: [...bugs], noise: [...noise] };
+  // A blocked release avoided no false alarm, however the failures were
+  // diagnosed: the team was stopped all the same.
+  return { bugs: [...bugs], noise: verdict === 'UNSAFE' ? [] : [...noise] };
 }
 
 export interface RunHistory {

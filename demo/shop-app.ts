@@ -9,6 +9,10 @@
  *              still works; the team's test is now stale (a test defect).
  *   bug        the cart total counts only the last item added (a real
  *              product defect).
+ *   slow-cart  Add-to-cart buttons stay disabled for 4 seconds while
+ *              prices load. Shoppers wait a moment; the team's test gives
+ *              up clicking after 3 and fails. The flaky test behind most
+ *              "just re-run it": nothing is wrong with the product.
  *
  * Planted defects in the Discount Rules admin page, which is built like a
  * real back-office feature (table, search, filter, form) so it can serve
@@ -27,7 +31,7 @@ import path from 'path';
 
 export const DEMO_PORT = Number(process.env.DEMO_PORT ?? 4173);
 
-export const DEMO_MODES = ['healthy', 'ui-change', 'bug', 'search-bug', 'filter-bug', 'validation-bug'] as const;
+export const DEMO_MODES = ['healthy', 'ui-change', 'bug', 'slow-cart', 'search-bug', 'filter-bug', 'validation-bug'] as const;
 
 export type DemoMode = (typeof DEMO_MODES)[number];
 
@@ -81,14 +85,15 @@ function productsPage(mode: DemoMode): string {
     (product) => `
   <div class="product">
     <div><strong>${product.name}</strong><div>$${product.price.toFixed(2)}</div></div>
-    <button id="${idPrefix}-${product.sku}" data-sku="${product.sku}">${label}</button>
+    <button id="${idPrefix}-${product.sku}" data-sku="${product.sku}"${mode === 'slow-cart' ? ' disabled' : ''}>${label}</button>
   </div>`
   ).join('');
 
   return layout(
     'Products',
     `<h1>Products</h1>${items}<p role="status" id="added"></p>`,
-    `document.querySelectorAll('button[data-sku]').forEach((button) => {
+    `${mode === 'slow-cart' ? "setTimeout(() => document.querySelectorAll('button[data-sku]').forEach((button) => (button.disabled = false)), 4000);" : ''}
+     document.querySelectorAll('button[data-sku]').forEach((button) => {
        button.addEventListener('click', () => {
          const items = cart();
          items.push(button.dataset.sku);

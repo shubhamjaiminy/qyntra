@@ -421,7 +421,7 @@ test.describe('findings for the pilot report', () => {
   });
 
   test('a product defect is a bug, even on a flaky test', () => {
-    expect(classifyFindings([failure('pay', true, false, 'known-flaky')])).toEqual({ bugs: ['pay'], noise: [] });
+    expect(classifyFindings([failure('pay', true, false, 'known-flaky')], 'UNSAFE')).toEqual({ bugs: ['pay'], noise: [] });
   });
 
   test('a new regression is a bug unless the test itself broke', () => {
@@ -429,7 +429,7 @@ test.describe('findings for the pilot report', () => {
       classifyFindings([
         failure('search', false, false, 'new-regression'),
         failure('selector', false, true, 'new-regression'),
-      ])
+      ], 'SAFE_WITH_RISK')
     ).toEqual({ bugs: ['search'], noise: ['selector'] });
   });
 
@@ -441,7 +441,16 @@ test.describe('findings for the pilot report', () => {
         failure('unclear', false, false, 'intermittent'),
         failure('new', false, false, 'unknown'),
         failure('flaky', false, false, 'known-flaky'),
-      ])
+      ], 'SAFE')
     ).toEqual({ bugs: [], noise: ['flaky', 'chronic'] });
+  });
+
+  test('a blocked run avoided no false alarm, but its bugs still count', () => {
+    expect(
+      classifyFindings(
+        [failure('cart', true, false, 'new-regression'), failure('selector', false, true, 'new-regression')],
+        'UNSAFE'
+      )
+    ).toEqual({ bugs: ['cart'], noise: [] });
   });
 });

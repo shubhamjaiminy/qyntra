@@ -83,8 +83,9 @@ From `qyntra-out/run-history.json`, which the gate updates every run:
   newly fails after passing in every recent run, unless the analysis put
   the failure down to the test itself.
 - **False alarm avoided:** a failure on a test diagnosed as broken, or
-  known to be flaky or chronically failing, and so down-weighted rather
-  than blocking on its own.
+  known to be flaky or chronically failing, in a run the gate did **not**
+  block. If the run was blocked anyway, the team was stopped all the
+  same, so nothing was avoided and it isn't counted.
 - **Counting:** a test counts once per week however many runs it failed
   in. A test that was a bug in one run and noise in another that week
   counts as a bug only.

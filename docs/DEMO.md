@@ -103,10 +103,71 @@ and the **Security** page:
 - The AI can be a free model on your own machine, or none at all —
   everything you just saw ran without AI.
 
+## Act 6 — "What a pilot week looks like" (1 min)
+
+```bash
+npm run demo:pilot
+```
+
+Eight pull requests go through the release gate in about 50 seconds:
+clean changes, three where slow-loading cart buttons make the team's
+cart tests fail, and one that breaks the cart total.
+
+```
+PR 3  Move cart badge into the header   SAFE_WITH_RISK  score 88
+PR 8  Rewrite the cart total            UNSAFE          score 86
+
+| Week of    | Runs | Bugs caught | False alarms avoided |
+| 2026-10-19 | 8    | 1           | 2                    |
+```
+
+*"Your team's tests failed on three changes where nothing was wrong
+with the product. Qyntra let those through and said why, and blocked
+the one that would have charged customers the wrong amount. That table
+is what you'd send me each week. It's counts only."* Open
+`demo/qyntra-out/pilot-review.md`: *"and this is what you keep, with
+the test names, to tick off what was right."*
+
+## Act 7 — "Your AI assistant" (2 min, for security buyers)
+
+```bash
+npm run demo:ai
+```
+
+Acme's support bot as shipped. Result **FAIL**: it leaks its system
+prompt (the planted canary appears), obeys an instruction hidden in
+base64, and crashes on an empty message. Open
+`demo/ai-bot/qyntra-out/ai-assessment.md`: each finding with what was
+tried and what came back, and the OWASP Top 10 for LLM Applications
+table, including the five categories it says it does *not* cover.
+
+```bash
+npm run demo:ai -- --fixed
+```
+
+Same checks after the fix: **PASS**. *"This runs in your CI on every
+prompt or model change."*
+
 ## Close
 
-*"Would you try it on one feature of your staging app for four weeks?
-It's free during the pilot."* → `docs/pilot/ONBOARDING.md`.
+*"Would you try it on your staging app? The first two weeks are free.
+If the numbers are there, it's $500 a month at a founding price, and
+if the first paid month doesn't deliver, I refund it."* →
+`docs/pilot/ONBOARDING.md`, terms in `docs/pilot/DESIGN-PARTNER.md`.
+
+## Rehearse the design-partner offer (not shown to the prospect)
+
+The demo account is also the operator, so you can practise the step
+after a yes:
+
+1. Open http://localhost:8080/admin. In the *Design partner* column
+   next to **Acme Shop**, click **Offer**.
+2. Open **Acme Shop → Billing**. The $500 *Design partner* plan shows,
+   *offered to you*. With no Stripe keys configured, it says to pay by
+   invoice. With Stripe test keys and `STRIPE_PRICE_PARTNER` set (see
+   `docs/saas/DEPLOY.md`), it's a **Start** button that goes to Stripe
+   Checkout.
+3. Back in `/admin`, **Withdraw offer** removes it again.
 
 ## Showing the AI (optional, prepare before the call)
 
@@ -127,6 +188,8 @@ npm run demo:check -- --with-ai
 | `Start the demo first` | Terminal 1 is not running `npm run demo:live` |
 | READY in a bug mode | The mode was set in the wrong folder: run `npm run demo:mode -- <mode>` from the repository root |
 | Can't log in to Qyntra Cloud | The demo was restarted, which resets it; log in again with the same details |
+| `demo:pilot` shows UNSAFE on the slow-cart PRs | The demo was started before this version: `npm run demo:stop`, then `npm run demo:live` again |
+| `/admin` says Not found | Same: restart the demo. It makes the demo account the operator on start |
 
 ## The benchmark behind the demo
 

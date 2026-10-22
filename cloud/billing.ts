@@ -145,7 +145,14 @@ export function extendWithBilling(router: Router, context: BillingContext): void
         <div class="card stat"><div class="label">Runs this month</div><div class="value">${usage.runs} / ${limits.runsPerMonth}</div></div>
       </div>
       ${!billingConfigured()
-        ? html`<div class="card"><p>Online billing is not configured on this server. To change plan, contact your Qyntra administrator.</p></div>`
+        ? html`<div class="card"><p>Online billing is not configured on this server. To change plan, contact your Qyntra administrator.</p></div>
+          ${org.offeredPlan && PLANS[org.offeredPlan] && org.plan !== org.offeredPlan
+            ? html`<div class="plans"><div class="card plan"><h2 style="margin-top:0">${PLANS[org.offeredPlan].name}</h2>
+                <span class="badge ok">offered to you</span>
+                <div class="price">$${PLANS[org.offeredPlan].price}<span class="small muted"> / month</span></div>
+                <ul>${PLANS[org.offeredPlan].features.map((feature) => html`<li>${feature}</li>`)}</ul>
+                <span class="muted small">Reply to your invitation email to pay by invoice.</span></div></div>`
+            : ''}`
         : html`<div class="plans">
           ${purchasablePlans(org).map((key) => {
             const plan = PLANS[key];

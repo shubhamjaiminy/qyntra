@@ -298,7 +298,7 @@ export function formatPilotReportMarkdown(report: PilotReport): string {
       '',
       'Bugs caught: failing tests attributed to the product, or newly failing after ' +
         'passing in every recent run. False alarms avoided: failures on broken, flaky ' +
-        'or chronically failing tests that were kept from blocking on their own. ' +
+        'or chronically failing tests in runs the gate did not block. ' +
         'Each test counts once per week. These are the gate\'s claims; confirm them ' +
         'with pilot-review.md, which stays with you.'
     );

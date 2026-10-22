@@ -473,6 +473,22 @@ test('the design-partner plan is sold only to an org an operator offered it to',
   }
 });
 
+test('without Stripe, an offered design-partner plan still shows, payable by invoice', async () => {
+  const { browser: ada, orgSlug } = await signUp(cloud, 'ada@acme.example', 'Acme');
+  const org = cloud.store.orgForMember(cloud.store.userByEmail('ada@acme.example')!.id, orgSlug)!;
+
+  expect((await ada.get(`/o/${orgSlug}/billing`)).body).not.toContain('Design partner');
+
+  cloud.store.offerPlan(org.id, 'partner');
+  const page = (await ada.get(`/o/${orgSlug}/billing`)).body;
+  expect(page).toContain('Online billing is not configured');
+  expect(page).toContain('Design partner');
+  expect(page).toContain('pay by invoice');
+
+  cloud.store.setPlan(org.id, 'partner');
+  expect((await ada.get(`/o/${orgSlug}/billing`)).body).not.toContain('offered to you');
+});
+
 test('a paid design-partner checkout puts the org on the partner plan', () => {
   const store = new Store(':memory:');
   const { org } = store.createUserWithOrg({ email: 'a@b.example', name: 'A', passwordHash: 'x', orgName: 'Acme' });

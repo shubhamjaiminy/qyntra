@@ -31,6 +31,10 @@ const CLOUD_CONFIG = path.join(__dirname, '.qyntra', 'cloud.json');
 async function start(): Promise<void> {
   fs.writeFileSync(MODE_FILE, 'healthy');
 
+  // The demo account runs the operator console (/admin), to show offering
+  // the design-partner plan.
+  process.env.QYNTRA_CLOUD_ADMINS ??= DEMO_LOGIN.email;
+
   for (const file of [DB_FILE, `${DB_FILE}-wal`, `${DB_FILE}-shm`]) fs.rmSync(file, { force: true });
   fs.rmSync(path.join(__dirname, 'qyntra-out', 'features'), { recursive: true, force: true });
 
@@ -68,11 +72,14 @@ async function start(): Promise<void> {
     Acme Shop      http://localhost:${DEMO_PORT}/admin/discount-rules
     Qyntra Cloud   http://localhost:${CLOUD_PORT}/login
                    ${DEMO_LOGIN.email} / ${DEMO_LOGIN.password}
+    Operator       http://localhost:${CLOUD_PORT}/admin
 
   In another terminal:
     npm run demo:check                 check Discount Rules and upload
     npm run demo:mode -- search-bug    break search (also: filter-bug, validation-bug, healthy)
     npm run demo:check -- --app        every feature in the menu
+    npm run demo:pilot                 a pilot week: 8 PRs, then the pilot report
+    npm run demo:ai                    attack the AI support bot (-- --fixed after)
 
   Ctrl+C to stop. The next start is a clean slate.
 `);

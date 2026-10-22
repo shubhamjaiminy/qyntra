@@ -1099,7 +1099,10 @@ function buildDecision(
     gated,
     risk,
     execution,
-    classifyFindings(failures.filter((failure) => failure.test !== 'Unanalyzed failure')),
+    classifyFindings(
+      failures.filter((failure) => failure.test !== 'Unanalyzed failure'),
+      gated.verdict
+    ),
     performanceSnapshot
   );
 
