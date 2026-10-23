@@ -62,19 +62,25 @@ async function rowSelector(page: Page): Promise<string | undefined> {
  * largest group of three or more visible siblings sharing a tag and
  * class, each with text of its own, outside navigation. Returned as a
  * selector that matches exactly that group.
+ *
+ * Never inside a table: a table with one data row has no list to probe,
+ * and its header cells are not items. Generated class names (MUI's
+ * jss274, CSS-module hashes) are left out of the selector, since they
+ * change between builds.
  */
 export async function cardSelector(page: Page): Promise<string | undefined> {
   const found = await page.evaluate(() => {
     let best: { selector: string; size: number } | undefined;
 
     for (const parent of Array.from(document.querySelectorAll('body *'))) {
-      if (parent.closest('nav, header, footer, [role=navigation], [role=menu], select, ul[role=listbox]')) continue;
+      if (parent.closest('nav, header, footer, [role=navigation], [role=menu], select, ul[role=listbox], table, [role=table], [role=grid], [role=row]')) continue;
 
       const groups = new Map<string, Element[]>();
 
       for (const child of Array.from(parent.children)) {
         const element = child as HTMLElement;
-        const classes = Array.from(element.classList).filter((name) => /^[A-Za-z_-][\w-]*$/.test(name));
+        // A digit marks a generated name (jss274, css-1x2y3z, title__a1B2c).
+        const classes = Array.from(element.classList).filter((name) => /^[A-Za-z_-][\w-]*$/.test(name) && !/\d/.test(name));
         if (classes.length === 0 || !element.offsetParent || !(element.innerText || '').trim()) continue;
 
         const key = `${element.tagName.toLowerCase()}.${classes.join('.')}`;

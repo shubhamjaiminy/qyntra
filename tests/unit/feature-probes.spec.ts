@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 
 import {
+  cardSelector,
   distinctiveWord,
   formProbes,
   invalidValueFor,
@@ -350,6 +351,20 @@ test.describe('sort-by dropdown probes', () => {
     expect(sortOptionMeaning('Z → A')).toEqual({ field: 'name', direction: 'desc' });
     expect(sortOptionMeaning('Featured')).toBeUndefined();
     expect(sortOptionMeaning('Newest')).toBeUndefined();
+  });
+
+  test('a table with a single row is not a list of cards made of its header cells', async ({ page }) => {
+    // Seen on a real MUI table: five header cells, one data row. The cells
+    // must not be taken for five items to search.
+    await page.setContent(`<input type="search" placeholder="Search Rule">
+      <table><thead><tr>${['Rule Name', 'Tours Assigned', 'Description', 'Status', 'Actions'].map((name) => `<th class="MuiTableCell-root MuiTableCell-head jss274">${name}</th>`).join('')}</tr></thead>
+      <tbody><tr><td>BO cancel fee</td><td>Admission</td><td>Cancel order</td><td>Active</td><td>Edit</td></tr></tbody></table>`);
+    expect(await listProbes(page)).toEqual([]);
+  });
+
+  test('generated class names are left out of a card selector', async ({ page }) => {
+    await page.setContent(`<div>${['Backpack $29.99', 'Bike Light $9.99', 'Onesie $7.99'].map((text) => `<div class="product-card jss12 css-1x2y3z">${text}</div>`).join('')}</div>`);
+    expect(await cardSelector(page)).toBe('div.product-card:visible');
   });
 
   test('a page without a list gets no sort probe from an unrelated dropdown', async ({ page }) => {
