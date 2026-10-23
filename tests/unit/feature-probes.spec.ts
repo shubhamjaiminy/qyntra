@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 
 import {
+  MISAIMED,
   cardSelector,
   distinctiveWord,
   formProbes,
@@ -10,6 +11,7 @@ import {
   sortOptionMeaning,
   sortOrder,
   tableProbes,
+  witnessed,
   type Probe,
 } from '../../scripts/lib/feature-probes';
 
@@ -365,6 +367,34 @@ test.describe('sort-by dropdown probes', () => {
   test('generated class names are left out of a card selector', async ({ page }) => {
     await page.setContent(`<div>${['Backpack $29.99', 'Bike Light $9.99', 'Onesie $7.99'].map((text) => `<div class="product-card jss12 css-1x2y3z">${text}</div>`).join('')}</div>`);
     expect(await cardSelector(page)).toBe('div.product-card:visible');
+  });
+
+  test('a probe watching the wrong elements withdraws its own finding instead of blaming the app', async ({ page }) => {
+    // Search works, but the probe tracks the header cells, which never change.
+    const table = `<input type="search" placeholder="Search rules" oninput="document.querySelectorAll('tbody tr').forEach((row) => row.hidden = !row.textContent.toLowerCase().includes(this.value.toLowerCase()))">
+      <table><thead><tr><th>Rule Name</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody><tr><td>BO cancel fee</td><td>Active</td><td>Edit</td></tr><tr><td>Summer</td><td>Active</td><td>Edit</td></tr></tbody></table>`;
+    const misaimed: Probe = {
+      kind: 'search',
+      description: 'Searched for "Rule"',
+      setup: [],
+      test: {
+        title: 'Search for "Rule" shows only matching rows',
+        intent: '',
+        body: witnessed('thead th:visible', [
+          "const rows = page.locator('thead th:visible');",
+          'const before = await rows.count();',
+          "await page.getByPlaceholder('Search rules').fill('Rule');",
+          "await expect(async () => { expect(await rows.count(), 'search should narrow the list').toBeLessThan(before); }).toPass({ timeout: 2_000 });",
+        ]),
+      },
+    };
+
+    await page.setContent(table);
+    const error = await runProbe(page, misaimed).then(() => undefined, (caught: Error) => caught);
+
+    expect(error?.message).toContain(MISAIMED);
+    expect(probeFailureIsDefect(String(error?.message))).toBe(false);
   });
 
   test('a page without a list gets no sort probe from an unrelated dropdown', async ({ page }) => {

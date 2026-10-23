@@ -31,7 +31,7 @@ import {
   type WrittenTest,
 } from './feature-ai';
 import { exploreFeature, slug } from './feature-explorer';
-import { probeFailureIsDefect, type Probe } from './feature-probes';
+import { MISAIMED, probeFailureIsDefect, type Probe } from './feature-probes';
 import {
   decideFeature,
   formatFeatureReport,
@@ -285,6 +285,10 @@ async function verifyProbes(probes: Probe[], suiteDir: string): Promise<TestOutc
     } else if (run && probeFailureIsDefect(run.error ?? '')) {
       outcomes.push({ ...base, status: 'app-defect', error: run.error, reason: `${probe.description}, but it did not.`, file });
       log.info(`  ! ${probe.test.title} — the application breaks this rule`);
+    } else if (run?.error?.includes(MISAIMED)) {
+      fs.rmSync(file, { force: true });
+      outcomes.push({ ...base, status: 'rejected', error: run.error, reason: 'withdrawn by its own self-check: the list changed, but the elements it watched did not, so it was watching the wrong thing' });
+      log.info(`  ✗ ${probe.test.title} — withdrawn by self-check (watching the wrong elements)`);
     } else {
       fs.rmSync(file, { force: true });
       outcomes.push({ ...base, status: 'rejected', error: run?.error, reason: 'the probe could not run on this page' });

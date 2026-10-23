@@ -176,6 +176,37 @@ function body(lines: string[]): string {
   return lines.join('\n');
 }
 
+/** Marker in the error a probe throws when its self-check withdraws it. */
+export const MISAIMED = 'Qyntra withdrew this finding';
+
+/**
+ * A list probe with a self-check. Before acting, it records the items it
+ * tracks and the list or table around them. If the probe then fails while
+ * its items are unchanged but the list around them did change ("no
+ * matching records", a new count), it was watching the wrong elements,
+ * such as a table's header cells: the failure is Qyntra's, not the
+ * application's, and is reported as such rather than as a defect.
+ */
+export function witnessed(rows: string, lines: string[]): string {
+  return body([
+    `const qyntraItems = page.locator(${quote(rows)});`,
+    "await qyntraItems.first().evaluate((item) => { const list = item.closest('table, [role=grid], [role=table]') || item.parentElement; if (list) list.setAttribute('data-qyntra-list', ''); }).catch(() => undefined);",
+    "const qyntraList = () => page.locator('[data-qyntra-list]').first().innerText().catch(() => '');",
+    "const qyntraItemsBefore = (await qyntraItems.allInnerTexts()).join('\\n');",
+    'const qyntraListBefore = await qyntraList();',
+    'try {',
+    ...lines.map((line) => `  ${line}`),
+    '} catch (error) {',
+    "  const itemsNow = (await qyntraItems.allInnerTexts()).join('\\n');",
+    '  const listNow = await qyntraList();',
+    '  if (itemsNow === qyntraItemsBefore && listNow !== qyntraListBefore) {',
+    `    throw new Error(${quote(`${MISAIMED}: the list on the page changed, but the elements this check watches did not, so it was watching the wrong thing. Not a finding about the application.`)});`,
+    '  }',
+    '  throw error;',
+    '}',
+  ]);
+}
+
 // --------------------------------------------------
 // SEARCH AND FILTER (on the feature page)
 // --------------------------------------------------
@@ -242,7 +273,7 @@ export async function listProbes(page: Page): Promise<Probe[]> {
       test: {
         title: `Search for "${word}" shows only matching rows`,
         intent: 'Protects search: it must narrow the list to rows that contain the query.',
-        body: body([
+        body: witnessed(rows, [
           `const rows = page.locator(${quote(rows)});`,
           'const before = await rows.count();',
           ...searchSetup,
@@ -289,7 +320,7 @@ export async function listProbes(page: Page): Promise<Probe[]> {
       test: {
         title: `Filter "${option}" shows only "${option}" rows`,
         intent: 'Protects the filter: every row left must have the chosen value.',
-        body: body([`await ${code}.selectOption({ label: ${quote(option)} });`, ...filterAssertion(rows, option)]),
+        body: witnessed(rows, [`await ${code}.selectOption({ label: ${quote(option)} });`, ...filterAssertion(rows, option)]),
       },
     });
     break;
@@ -377,7 +408,7 @@ async function comboboxFilter(page: Page, rows: string): Promise<Probe | undefin
       test: {
         title: `Filter "${option}" shows only "${option}" rows`,
         intent: 'Protects the filter: every row left must have the chosen value.',
-        body: body([
+        body: witnessed(rows, [
           `await ${code}.click();`,
           `await page.getByRole('option', { name: ${quote(option)}, exact: true }).click();`,
           ...filterAssertion(rows, option),
@@ -539,7 +570,7 @@ async function sortControlProbes(page: Page, rows: string): Promise<Probe[]> {
         test: {
           title: `Sorting by ${field} follows "${first}" and "${second}"`,
           intent: 'Protects sorting: the order the user chose must be the order shown.',
-          body: body([
+          body: witnessed(rows, [
             `const sortOrder = ${SORT_ORDER_SOURCE};`,
             `const items = page.locator(${quote(rows)});`,
             `const values = () => items.evaluateAll(${itemValuesSource(field)});`,
@@ -593,7 +624,7 @@ export async function tableProbes(page: Page, rows: string): Promise<Probe[]> {
         test: {
           title: `"${header.name}" sorts, and sorts the other way on a second click`,
           intent: 'Protects column sorting.',
-          body: body([
+          body: witnessed(rows, [
             `const sortOrder = ${SORT_ORDER_SOURCE};`,
             `const rows = page.locator(${quote(rows)});`,
             `const values = () => rows.evaluateAll((all) => all.map((row) => ((row.querySelectorAll('td, [role=gridcell], [role=cell]')[${column}] || {}).innerText || '').trim()));`,
@@ -625,7 +656,7 @@ export async function tableProbes(page: Page, rows: string): Promise<Probe[]> {
       test: {
         title: `"${nextName}" shows the next rows${previousName ? `, "${previousName}" returns` : ''}`,
         intent: 'Protects pagination.',
-        body: body([
+        body: witnessed(rows, [
           `const rows = page.locator(${quote(rows)});`,
           "const first = (await rows.allInnerTexts()).join('\\n');",
           `await page.getByRole('${role}', { name: ${quote(nextName)}, exact: true }).click();`,
@@ -827,6 +858,8 @@ export async function formProbes(page: Page, setup: string[]): Promise<Probe[]> 
  * (an element not found to click or fill) means the probe itself broke.
  */
 export function probeFailureIsDefect(error: string): boolean {
+  if (error.includes(MISAIMED)) return false;
+
   const assertion = /expect\(|toPass|toBeVisible|toBeLessThan|toContain/.test(error);
   const actionFailed = /locator\.(fill|click|selectOption|check)\b|page\.goto/.test(error);
 
