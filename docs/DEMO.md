@@ -8,6 +8,10 @@ once installed.
 
 Rehearsed end to end on 2026-10-12: each act takes 25–50 seconds.
 
+**No time for a live demo?** `npm run demo:video` records a 2½-minute
+narrated explainer from the real demo (macOS and ffmpeg needed) to
+`demo/qyntra-out/qyntra-explainer.mp4`. Send it ahead of a first call.
+
 ## Before the call (2 minutes)
 
 **Terminal 1** — start everything, leave it running:
