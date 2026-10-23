@@ -4,6 +4,8 @@
  *
  *   search      typing a word from one row leaves fewer rows, all containing it
  *   filter      choosing an option leaves only rows with a cell equal to it
+ *   sort        a sortable column, or a "sort by" dropdown such as "Price (high
+ *               to low)", puts the rows in that order, and the reverse
  *   validation  an empty form, and an out-of-range number, are rejected with
  *               a visible error and no attempt to save
  *
@@ -52,7 +54,45 @@ async function rowSelector(page: Page): Promise<string | undefined> {
     }
   }
 
-  return undefined;
+  return cardSelector(page);
+}
+
+/**
+ * Items shown as cards rather than table rows, as product grids are: the
+ * largest group of three or more visible siblings sharing a tag and
+ * class, each with text of its own, outside navigation. Returned as a
+ * selector that matches exactly that group.
+ */
+export async function cardSelector(page: Page): Promise<string | undefined> {
+  const found = await page.evaluate(() => {
+    let best: { selector: string; size: number } | undefined;
+
+    for (const parent of Array.from(document.querySelectorAll('body *'))) {
+      if (parent.closest('nav, header, footer, [role=navigation], [role=menu], select, ul[role=listbox]')) continue;
+
+      const groups = new Map<string, Element[]>();
+
+      for (const child of Array.from(parent.children)) {
+        const element = child as HTMLElement;
+        const classes = Array.from(element.classList).filter((name) => /^[A-Za-z_-][\w-]*$/.test(name));
+        if (classes.length === 0 || !element.offsetParent || !(element.innerText || '').trim()) continue;
+
+        const key = `${element.tagName.toLowerCase()}.${classes.join('.')}`;
+        groups.set(key, [...(groups.get(key) ?? []), element]);
+      }
+
+      for (const [selector, members] of groups) {
+        const texts = new Set(members.map((member) => (member as HTMLElement).innerText.trim()));
+        if (members.length < 3 || texts.size < members.length) continue;
+        if (document.querySelectorAll(selector).length !== members.length) continue;
+        if (!best || members.length > best.size) best = { selector, size: members.length };
+      }
+    }
+
+    return best?.selector;
+  });
+
+  return found ? `${found}:visible` : undefined;
 }
 
 /**
@@ -255,6 +295,7 @@ export async function listProbes(page: Page): Promise<Probe[]> {
     if (filter) probes.push(filter);
   }
 
+  probes.push(...(await sortControlProbes(page, rows)));
   probes.push(...(await tableProbes(page, rows)));
 
   return probes;
@@ -377,6 +418,139 @@ export const SORT_ORDER_SOURCE = String.raw`function sortOrder(values) {
 }`;
 
 export const sortOrder = new Function(`return (${SORT_ORDER_SOURCE})`)() as (values: string[]) => 'asc' | 'desc' | 'none' | 'equal';
+
+/**
+ * The value an item is sorted by: its price (the first amount of money
+ * in it), or its name (a name or title element, else its first line).
+ * Source text for the same reason as SORT_ORDER_SOURCE.
+ */
+export const ITEM_VALUE_SOURCE = String.raw`function itemValue(item, field) {
+  var text = (item.innerText || '').trim();
+  if (field === 'price') {
+    var money = text.match(/(?:[$€£¥₹]|USD|EUR|GBP|INR)\s?-?\d[\d,]*(?:\.\d+)?|-?\d[\d,]*(?:\.\d+)?\s?(?:[$€£¥₹]|USD|EUR|GBP|INR)/);
+    return money ? money[0].replace(/[^\d.-]/g, '') : '';
+  }
+  var named = item.querySelector('[class*=name], [class*=title], h1, h2, h3, h4, h5');
+  return ((named && named.innerText) || text.split('\n')[0] || '').trim();
+}`;
+
+type SortField = 'price' | 'name';
+
+/**
+ * Every item's value, read in the page by the same source the generated
+ * test embeds. Evaluated as an expression rather than through new
+ * Function in the page, which a Content-Security-Policy without
+ * unsafe-eval, common on real sites, would refuse.
+ */
+async function currentItemValues(page: Page, rows: string, field: SortField): Promise<string[]> {
+  const items = page.locator(rows);
+  await items.evaluateAll((all) => all.forEach((item, index) => item.setAttribute('data-qyntra-item', String(index))));
+
+  try {
+    return (await page.evaluate(
+      `(() => { const itemValue = ${ITEM_VALUE_SOURCE}; return Array.from(document.querySelectorAll('[data-qyntra-item]')).map((item) => itemValue(item, ${quote(field)})); })()`
+    )) as string[];
+  } finally {
+    await page.evaluate(() => document.querySelectorAll('[data-qyntra-item]').forEach((item) => item.removeAttribute('data-qyntra-item'))).catch(() => undefined);
+  }
+}
+
+/** A function, as source, that runs in the page and reads every item's value. */
+function itemValuesSource(field: SortField): string {
+  return `(all) => { const itemValue = ${ITEM_VALUE_SOURCE}; return all.map((item) => itemValue(item, ${quote(field)})); }`;
+}
+
+/** What a sort option sorts by and which way, from its wording. */
+export function sortOptionMeaning(option: string): { field: SortField; direction: 'asc' | 'desc' } | undefined {
+  const text = option.toLowerCase();
+  const to = '\\s*(?:to|-|–|—|→|>)\\s*';
+
+  const direction = new RegExp(`\\ba${to}z\\b|low(?:est)?${to}high|ascending|cheapest|lowest first`).test(text)
+    ? 'asc'
+    : new RegExp(`\\bz${to}a\\b|high(?:est)?${to}low|descending|most expensive|highest first`).test(text)
+      ? 'desc'
+      : undefined;
+
+  const field: SortField | undefined = /price|cost|cheap|expensive/.test(text)
+    ? 'price'
+    : /name|title|alphabet|\ba\s*(?:to|-|–|—|→|>)\s*z\b|\bz\s*(?:to|-|–|—|→|>)\s*a\b/.test(text)
+      ? 'name'
+      : undefined;
+
+  return direction && field ? { field, direction } : undefined;
+}
+
+/**
+ * Sorting by a "sort by" dropdown, as shops and catalogues have: for
+ * each field with both directions on offer, choose the reverse of what
+ * is shown, check the order, then switch back and check again.
+ */
+async function sortControlProbes(page: Page, rows: string): Promise<Probe[]> {
+  const probes: Probe[] = [];
+
+  for (const select of await page.$$('select')) {
+    if (!(await select.isVisible())) continue;
+
+    const options = await select.evaluate((node) => Array.from((node as HTMLSelectElement).options).map((option) => option.label.trim()));
+    const meanings = options.map((option) => ({ option, meaning: sortOptionMeaning(option) })).filter((entry) => entry.meaning);
+    if (meanings.length < 2) continue;
+
+    const code =
+      (await controlCode(page, select)) ??
+      (await select.evaluate((node) => {
+        for (const attribute of ['data-testid', 'data-test', 'data-cy', 'name', 'id']) {
+          const value = node.getAttribute(attribute);
+          if (value) return { attribute, value };
+        }
+        return undefined;
+      }).then(async (found) => {
+        if (!found) return (await page.locator('select:visible').count()) === 1 ? "page.locator('select:visible')" : undefined;
+        const selector = found.attribute === 'id' ? `#${found.value}` : `[${found.attribute}="${found.value}"]`;
+        return (await page.locator(selector).count()) === 1 ? `page.locator(${quote(selector)})` : undefined;
+      }));
+
+    if (!code) continue;
+
+    for (const field of ['price', 'name'] as SortField[]) {
+      const ascending = meanings.find((entry) => entry.meaning!.field === field && entry.meaning!.direction === 'asc')?.option;
+      const descending = meanings.find((entry) => entry.meaning!.field === field && entry.meaning!.direction === 'desc')?.option;
+      if (!ascending || !descending) continue;
+
+      // Only a field every item has, with values that differ, can show an order.
+      const values = await currentItemValues(page, rows, field);
+      if (values.length < 3 || values.some((value) => value === '') || new Set(values).size < 2) continue;
+
+      // Choose the direction not already shown first, so the page must change.
+      const shown = sortOrder(values);
+      const [first, second] = shown === 'desc' ? [ascending, descending] : [descending, ascending];
+      const firstDirection = first === ascending ? 'asc' : 'desc';
+      const secondDirection = firstDirection === 'asc' ? 'desc' : 'asc';
+
+      probes.push({
+        kind: 'sort',
+        description: `Chose "${first}" then "${second}": items should be ordered by ${field} each way`,
+        setup: [],
+        test: {
+          title: `Sorting by ${field} follows "${first}" and "${second}"`,
+          intent: 'Protects sorting: the order the user chose must be the order shown.',
+          body: body([
+            `const sortOrder = ${SORT_ORDER_SOURCE};`,
+            `const items = page.locator(${quote(rows)});`,
+            `const values = () => items.evaluateAll(${itemValuesSource(field)});`,
+            `await ${code}.selectOption({ label: ${quote(first)} });`,
+            `await expect.poll(async () => sortOrder(await values()), { message: ${quote(`choosing "${first}" should order the items by ${field}`)}, timeout: 10_000 }).toBe('${firstDirection}');`,
+            `await ${code}.selectOption({ label: ${quote(second)} });`,
+            `await expect.poll(async () => sortOrder(await values()), { message: ${quote(`choosing "${second}" should order the items by ${field}`)}, timeout: 10_000 }).toBe('${secondDirection}');`,
+          ]),
+        },
+      });
+    }
+
+    if (probes.length > 0) break;
+  }
+
+  return probes;
+}
 
 export async function tableProbes(page: Page, rows: string): Promise<Probe[]> {
   const probes: Probe[] = [];

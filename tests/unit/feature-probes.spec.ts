@@ -6,6 +6,7 @@ import {
   invalidValueFor,
   listProbes,
   probeFailureIsDefect,
+  sortOptionMeaning,
   sortOrder,
   tableProbes,
   type Probe,
@@ -281,5 +282,78 @@ test.describe('native validation', () => {
 
     await page.setContent(emailForm(true));
     await expect(runProbe(page, probe)).rejects.toThrow(/not-an-email in "Email" should be rejected/);
+  });
+});
+
+/** A product grid of cards with a "sort by" dropdown, like most shops. */
+function shopPage(bug?: 'sort'): string {
+  const products = [
+    ['Backpack', 29.99],
+    ['Bike Light', 9.99],
+    ['Onesie', 7.99],
+    ['Fleece Jacket', 49.99],
+  ] as const;
+
+  return `<nav><a href="/">Home</a><a href="/cart">Cart</a></nav>
+  <select data-test="product-sort">
+    <option>Name (A to Z)</option><option>Name (Z to A)</option>
+    <option>Price (low to high)</option><option>Price (high to low)</option>
+  </select>
+  <div class="inventory_list">${[...products]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([name, price]) => `<div class="inventory_item"><div class="inventory_item_name">${name}</div><p>Soft and useful.</p><div class="price">$${price.toFixed(2)}</div><button>Add to cart</button></div>`)
+    .join('')}</div>
+  <script>(() => {
+    const sorters = {
+      'Name (A to Z)': (a, b) => a.name.localeCompare(b.name), 'Name (Z to A)': (a, b) => b.name.localeCompare(a.name),
+      'Price (low to high)': (a, b) => a.price - b.price, 'Price (high to low)': (a, b) => b.price - a.price,
+    };
+    document.querySelector('select').addEventListener('change', (event) => {
+      ${bug === 'sort' ? 'return;' : ''}
+      const list = document.querySelector('.inventory_list');
+      const items = [...list.children].map((node) => ({ node, name: node.querySelector('.inventory_item_name').textContent, price: parseFloat(node.querySelector('.price').textContent.slice(1)) }));
+      items.sort(sorters[event.target.selectedOptions[0].label]).forEach((item) => list.appendChild(item.node));
+    });
+  })();</script>`;
+}
+
+test.describe('sort-by dropdown probes', () => {
+  test('a product grid of cards with a sort dropdown gets a probe per field, and they pass when it works', async ({ page }) => {
+    await page.setContent(shopPage());
+    const probes = (await listProbes(page)).filter((probe) => probe.kind === 'sort');
+
+    expect(probes.map((probe) => probe.test.title)).toEqual([
+      'Sorting by price follows "Price (high to low)" and "Price (low to high)"',
+      'Sorting by name follows "Name (Z to A)" and "Name (A to Z)"',
+    ]);
+    expect(probes[0].test.body).toContain('[data-test="product-sort"]');
+    expect(probes[0].test.body).not.toContain('__name');
+
+    for (const probe of probes) {
+      await page.setContent(shopPage());
+      await runProbe(page, probe);
+    }
+  });
+
+  test('the probe fails when choosing a sort order changes nothing', async ({ page }) => {
+    await page.setContent(shopPage());
+    const [price] = (await listProbes(page)).filter((probe) => probe.kind === 'sort');
+
+    await page.setContent(shopPage('sort'));
+    await expect(runProbe(page, price)).rejects.toThrow(/choosing "Price \(high to low\)" should order the items by price/);
+  });
+
+  test('sort options are read from their wording', () => {
+    expect(sortOptionMeaning('Price (high to low)')).toEqual({ field: 'price', direction: 'desc' });
+    expect(sortOptionMeaning('Price: Low - High')).toEqual({ field: 'price', direction: 'asc' });
+    expect(sortOptionMeaning('Name (A to Z)')).toEqual({ field: 'name', direction: 'asc' });
+    expect(sortOptionMeaning('Z → A')).toEqual({ field: 'name', direction: 'desc' });
+    expect(sortOptionMeaning('Featured')).toBeUndefined();
+    expect(sortOptionMeaning('Newest')).toBeUndefined();
+  });
+
+  test('a page without a list gets no sort probe from an unrelated dropdown', async ({ page }) => {
+    await page.setContent('<label>Country <select><option>Price (low to high)</option><option>Price (high to low)</option></select></label><p>Hello</p>');
+    expect(await listProbes(page)).toEqual([]);
   });
 });

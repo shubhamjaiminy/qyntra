@@ -1023,7 +1023,9 @@ Qyntra logs in, finds the feature, and then, with no one guiding it:
    - *filter*: choosing "Active" leaves only rows with a cell "Active" —
      native selects and custom (ARIA) dropdowns such as MUI's;
    - *sorting*: clicking a sortable column header sorts it, and a second
-     click reverses it — numbers, money, percentages, dates and text;
+     click reverses it — numbers, money, percentages, dates and text. A
+     "sort by" dropdown ("Price (high to low)", "Name (A to Z)") must put
+     the items in that order each way, in tables or in product-card grids;
    - *pagination*: "Next" shows different rows, "Previous" brings the
      first ones back;
    - *validation*: an empty form is rejected (or its submit stays
