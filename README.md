@@ -1211,6 +1211,14 @@ CI cache. Qyntra has nowhere to send them.
 
 ---
 
+## Developing Qyntra
+
+Changing Qyntra itself: [docs/DEVELOPING.md](docs/DEVELOPING.md) — how
+the pieces fit, the rules that keep its answers trustworthy, and how to
+add a behaviour probe.
+
+---
+
 ## Current limitations
 
 Stated plainly, because you will find them anyway:

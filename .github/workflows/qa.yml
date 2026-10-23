@@ -55,6 +55,14 @@ jobs:
       - name: TypeScript validation
         run: npm run typecheck
 
+      # What customers install (dist/) and what Qyntra Cloud runs
+      # (dist-cloud/) must build, not just typecheck.
+      - name: Build the CLI package
+        run: npm run build
+
+      - name: Build Qyntra Cloud
+        run: npm run cloud:build
+
       - name: Run Qyntra unit tests
         run: npm run test:unit
 
